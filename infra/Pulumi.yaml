@@ -1,0 +1,6 @@
+name: bsky-data-lake
+description: AWS infrastructure for the Bluesky data lake (S3 notifications, SQS, Glue)
+runtime:
+  name: python
+  options:
+    toolchain: uv

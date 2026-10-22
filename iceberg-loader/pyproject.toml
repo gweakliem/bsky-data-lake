@@ -1,0 +1,33 @@
+[project]
+name = "bsky-iceberg-loader"
+version = "0.1.0"
+description = "Append raw Bluesky Jetstream Parquet files to an Iceberg table as S3 notifications arrive on SQS"
+readme = "README.md"
+authors = [
+    { name = "Gordon Weakliem", email = "gordon.weakliem@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "boto3>=1.43.117",
+    "pandas<3",
+    "pysail==0.7.2",
+    "pyspark-client==4.2.0",
+    "python-dotenv>=1.2.4",
+]
+
+[project.scripts]
+bsky-iceberg-loader = "bsky_iceberg_loader:main"
+
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pyarrow>=26.0.0",
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::FutureWarning"]

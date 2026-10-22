@@ -1,0 +1,10 @@
+config:
+  aws:region: us-west-2
+  # Bucket names are read from BSKY_BUCKET / BSKY_WAREHOUSE_BUCKET in the repo's
+  # .env so they aren't committed; set bsky-data-lake:bucket /
+  # bsky-data-lake:warehouseBucket to override.
+
+  # The SSO PowerUserAccess role can't create IAM policies; an admin creates
+  # one from `pulumi stack output loader_policy_document` instead.
+  bsky-data-lake:manageIam: "false"
+encryptionsalt: v1:DK4jAg2SzZc=:v1:k8MlwSJH+6h4fdUQ:irUSNmDlRrnaOAiu7pe2/2yl+k5q+A==

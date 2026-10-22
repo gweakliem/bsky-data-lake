@@ -2,6 +2,8 @@
 
 Subscribes to the Bluesky [Jetstream](https://github.com/bluesky-social/jetstream) firehose and writes the raw messages to Parquet files.
 
+[`iceberg-loader/`](iceberg-loader/) is a PySpark job (run on Sail) that appends those files to an Iceberg table in AWS Glue as S3 notifications arrive on SQS. [`infra/`](infra/) is the Pulumi stack for the AWS resources it uses (SQS, bucket notification, Glue database, IAM policy).
+
 ## Usage
 
 ```bash

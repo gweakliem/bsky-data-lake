@@ -22,7 +22,32 @@ eval "$(aws configure export-credentials --profile <profile> --format env)"
 cargo run -- --prefix jetstream-test   # bucket from .env; jetstream-test/ is the scratch prefix for manual runs
 ```
 
-## Architecture
+## iceberg-loader (Python subproject)
+
+`iceberg-loader/` is a separate uv project. Run its commands from that directory:
+
+```bash
+uv run pytest                                   # starts a local Sail server; no AWS needed
+uv run pytest tests/test_loader.py -k skips     # single test
+uv run bsky-iceberg-loader --once               # one SQS batch against real AWS
+```
+
+It long-polls the SQS queue from `infra/` of S3 ObjectCreated notifications and appends the referenced files to the Iceberg table `glue.bsky_raw.jetstream`, partitioned by identity columns `day`/`hour` (UTC of `received_at`), via PySpark over Spark Connect to Sail.
+- **Delivery:** messages are deleted only after the Iceberg commit. Redelivered files are skipped by checking `source_file` in the table.
+- **Notification filter:** the S3 notification must filter on the ingestor's prefix, because Iceberg data files are also `.parquet` in the same bucket.
+- **Sail constraints:** no `input_file_name()` (files are tagged with `F.lit`), Glue tables need an explicit `LOCATION`, and no streaming.
+- **Tests:** they use Sail's in-memory catalog with `file://` table locations.
+
+## infra (Pulumi subproject)
+
+`infra/` is a Pulumi Python stack (uv toolchain) for the SQS queue + DLQ, the S3 bucket notification, the Glue database `bsky_raw` and the loader's IAM policy. The raw and warehouse buckets are pre-existing and not managed. Infrastructure changes go here, not into ad-hoc scripts.
+- **Run commands from `infra/`:** `uv run pytest` checks resources with Pulumi mocks; `pulumi preview` / `pulumi up` need `AWS_PROFILE`.
+- **Bucket names** come from `BSKY_BUCKET` / `BSKY_WAREHOUSE_BUCKET` in `.env`, so they aren't committed. Iceberg tables live in the warehouse bucket.
+- **`BucketNotification` owns the bucket's entire notification configuration.**
+- **State and passphrase:** state is in a dedicated S3 state bucket, not Pulumi Cloud; the CLI's default login is an ephemeral agent account. Before any `pulumi` command, set `AWS_PROFILE`, `PULUMI_BACKEND_URL=s3://<state-bucket>?region=us-west-2` and `PULUMI_CONFIG_PASSPHRASE_FILE=~/.config/bsky-data-lake/pulumi-passphrase`. The `pulumi` binary is at `~/.pulumi/bin/pulumi` and isn't on PATH.
+- **IAM is off in `dev`:** `manageIam` is `false` there because the SSO `PowerUserAccess` role can't create IAM policies. The policy JSON is exported as `loader_policy_document` for an admin to create.
+
+## Architecture (Rust ingestor)
 
 Rust port of a Python Jetstream→DuckDB ingestor (`~/git/bluesky-jetstream-ingest`), writing Parquet instead. Three modules:
 

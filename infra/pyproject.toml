@@ -1,0 +1,18 @@
+[project]
+name = "bsky-data-lake-infra"
+description = "Pulumi stack for the Bluesky data lake"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "pulumi>=3.271.0",
+    "pulumi-aws>=7.51.1",
+    "python-dotenv>=1.2.4",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+filterwarnings = ["ignore::DeprecationWarning:pulumi_aws.*"]

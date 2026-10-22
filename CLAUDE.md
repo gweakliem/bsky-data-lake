@@ -10,23 +10,23 @@ cargo test                                    # all tests (no network/AWS needed
 cargo test splits_batch_at_hour_boundaries    # single test by name substring
 cargo clippy --all-targets                    # lint (kept warning-free)
 
-cargo run -- <output> [--batch-size N] [--flush-interval SECS]   # <output> = local dir or s3://bucket/prefix
+cargo run -- [<output>] [--bucket B] [--prefix P] [--batch-size N] [--flush-interval SECS]
 ```
+
+`<output>` is a local dir or `s3://bucket/prefix` and overrides `--bucket`. The real bucket name and region live in a git-ignored `.env` (`BSKY_BUCKET`, `AWS_REGION`; template in `.env.example`), loaded at startup via `dotenvy`. Keep bucket names and account IDs out of committed files, since the repo is public.
 
 Running against S3 with an AWS profile (object_store does not read `~/.aws/config` profiles/SSO, so export creds first):
 
 ```bash
-eval "$(aws configure export-credentials --profile gweakliem --format env)"
-AWS_REGION=us-west-2 cargo run -- s3://bsky-data-drop-525238890881-us-west-2-an/jetstream-test
+eval "$(aws configure export-credentials --profile <profile> --format env)"
+cargo run -- --prefix jetstream-test   # bucket from .env; jetstream-test/ is the scratch prefix for manual runs
 ```
-
-The bucket name really ends in `-an` (an S3 account-regional bucket). `jetstream-test/` is the scratch prefix used for manual test runs.
 
 ## Architecture
 
 Rust port of a Python Jetstream→DuckDB ingestor (`~/git/bluesky-jetstream-ingest`), writing Parquet instead. Three modules:
 
-- `main.rs` — CLI (clap, with `BSKY_*` env fallbacks), installs the rustls crypto provider, wires up the tasks, and turns SIGINT/SIGTERM into a `watch` shutdown signal.
+- `main.rs` — CLI (clap, with `BSKY_*` env fallbacks, `.env` loaded first; `resolve_output` turns output/bucket/prefix into one location), installs the rustls crypto provider, wires up the tasks, and turns SIGINT/SIGTERM into a `watch` shutdown signal.
 - `ingest.rs` — two tokio tasks joined by a bounded `mpsc` channel:
   - `run_ingest`: websocket reader. Reconnects with exponential backoff (1s→60s) and resumes using the last `time_us` as Jetstream's `?cursor=`. Parses only `time_us` from each message; the payload is kept as the raw string.
   - `run_writer`: buffers `Record`s and flushes when `batch_size` is reached or `flush_interval` ticks.

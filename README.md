@@ -8,11 +8,21 @@ Subscribes to the Bluesky [Jetstream](https://github.com/bluesky-social/jetstrea
 cargo run --release -- data/ --batch-size 10000 --flush-interval 60
 ```
 
-The output can be a local directory or an S3 location:
+The output can be a local directory or an S3 location, given either as a URL or as `--bucket` (plus optional `--prefix`, default `jetstream`):
 
 ```bash
 cargo run --release -- s3://my-bucket/raw/jetstream
+cargo run --release -- --bucket my-bucket --prefix raw/jetstream
 ```
+
+Settings can also be kept in a `.env` file in the working directory (git-ignored; see `.env.example`). Real environment variables and command-line options take precedence:
+
+```bash
+cp .env.example .env   # then set BSKY_BUCKET, AWS_REGION, ...
+cargo run --release    # writes to s3://$BSKY_BUCKET/jetstream
+```
+
+A positional output path overrides `--bucket`, so you can still write locally with `cargo run -- data/`.
 
 S3 settings come from the standard environment variables: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`/`AWS_DEFAULT_REGION`, and `AWS_ENDPOINT` (with `AWS_ALLOW_HTTP=true` for plain-HTTP endpoints such as MinIO). Instance/ECS/web-identity credentials are also picked up. Named profiles and SSO in `~/.aws/config` are **not** read directly; export them first:
 
@@ -24,7 +34,9 @@ A batch is written when it reaches `--batch-size` messages or when `--flush-inte
 
 | Option | Env | Default | |
 |---|---|---|---|
-| `<output>` | `BSKY_OUTPUT` | | Local directory or `s3://bucket/prefix` |
+| `<output>` | `BSKY_OUTPUT` | | Local directory or `s3://bucket/prefix`; overrides `--bucket` |
+| `--bucket` | `BSKY_BUCKET` | | S3 bucket, used when no `<output>` is given |
+| `--prefix` | `BSKY_PREFIX` | `jetstream` | Key prefix within `--bucket` |
 | `--batch-size` | `BSKY_BATCH_SIZE` | 10000 | Messages per file |
 | `--flush-interval` | `BSKY_FLUSH_INTERVAL` | 60 | Max seconds between writes |
 | `--url` | `BSKY_JETSTREAM_URL` | `wss://jetstream2.us-east.bsky.network/subscribe` | Jetstream endpoint |

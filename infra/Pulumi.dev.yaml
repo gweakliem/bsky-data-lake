@@ -4,7 +4,7 @@ config:
   # .env so they aren't committed; set bsky-data-lake:bucket /
   # bsky-data-lake:warehouseBucket to override.
 
-  # The SSO PowerUserAccess role can't create IAM policies; an admin creates
-  # one from `pulumi stack output loader_policy_document` instead.
-  bsky-data-lake:manageIam: "false"
+  # IAM roles and policies are created within the delegated scope set up in
+  # iam-bootstrap/ (BskyDataLakeDeveloper permission set).
+  bsky-data-lake:manageIam: "true"
 encryptionsalt: v1:DK4jAg2SzZc=:v1:k8MlwSJH+6h4fdUQ:irUSNmDlRrnaOAiu7pe2/2yl+k5q+A==

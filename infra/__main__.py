@@ -13,6 +13,8 @@ import pulumi
 import pulumi_aws as aws
 from dotenv import find_dotenv, load_dotenv
 
+import bsky_iam
+
 load_dotenv(find_dotenv(usecwd=True))
 
 config = pulumi.Config()
@@ -155,10 +157,11 @@ loader_policy_document = pulumi.Output.all(queue.arn, account_id, region).apply(
     )
 )
 
-# Creating IAM policies needs IAM admin rights (PowerUserAccess can't), so this
-# can be turned off and the exported document handed to an admin instead.
+# Created through bsky_iam, which keeps it inside the delegated IAM scope (see
+# iam-bootstrap/). In an account without that delegation, turn manageIam off and
+# hand the exported document to an admin instead.
 if manage_iam:
-    loader_policy = aws.iam.Policy(
+    loader_policy = bsky_iam.policy(
         "iceberg-loader",
         name="bsky-iceberg-loader",
         description="Consume raw-file notifications and append to the raw Iceberg tables",

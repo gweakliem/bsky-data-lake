@@ -6,17 +6,27 @@ import os
 from pathlib import Path
 
 import pulumi
+import pytest
+
+
+IAM_TYPES = ("aws:iam/role:Role", "aws:iam/policy:Policy")
 
 
 class Mocks(pulumi.runtime.Mocks):
+    def __init__(self):
+        # Inputs of every IAM role and policy registered, by type.
+        self.iam: dict[str, list[dict]] = {t: [] for t in IAM_TYPES}
+
     def new_resource(self, args: pulumi.runtime.MockResourceArgs):
         state = dict(args.inputs)
         name = args.inputs.get("name", args.name)
         if args.typ == "aws:sqs/queue:Queue":
             state["arn"] = f"arn:aws:sqs:us-west-2:123456789012:{name}"
             state["url"] = f"https://sqs.us-west-2.amazonaws.com/123456789012/{name}"
-        elif args.typ == "aws:iam/policy:Policy":
-            state["arn"] = f"arn:aws:iam::123456789012:policy/{name}"
+        elif args.typ in IAM_TYPES:
+            self.iam[args.typ].append(state)
+            kind = args.typ.rsplit(":", 1)[1].lower()
+            state["arn"] = f"arn:aws:iam::123456789012:{kind}{args.inputs.get('path', '/')}{name}"
         return f"{args.name}-id", state
 
     def call(self, args: pulumi.runtime.MockCallArgs):
@@ -30,11 +40,14 @@ class Mocks(pulumi.runtime.Mocks):
 os.environ["BSKY_BUCKET"] = "test-bucket"
 os.environ["BSKY_WAREHOUSE_BUCKET"] = "test-warehouse"
 os.environ.pop("BSKY_PREFIX", None)
-pulumi.runtime.set_mocks(Mocks(), preview=False)
+mocks = Mocks()
+pulumi.runtime.set_mocks(mocks, preview=False)
 
 _spec = importlib.util.spec_from_file_location("infra", Path(__file__).with_name("__main__.py"))
 infra = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(infra)
+
+import bsky_iam  # noqa: E402  (imported by __main__.py; needs the mocks set first)
 
 
 @pulumi.runtime.test
@@ -97,3 +110,55 @@ def test_loader_policy_scopes():
 @pulumi.runtime.test
 def test_loader_policy_created_by_default():
     return infra.loader_policy.policy.apply(lambda p: None)
+
+
+@pulumi.runtime.test
+def test_loader_policy_in_delegated_path():
+    def check(args):
+        path, arn = args
+        assert path == "/bsky/"
+        assert arn == "arn:aws:iam::123456789012:policy/bsky/bsky-iceberg-loader"
+
+    return pulumi.Output.all(infra.loader_policy.path, infra.loader_policy.arn).apply(check)
+
+
+_TRUST = json.dumps(
+    {
+        "Version": "2012-10-17",
+        "Statement": [{"Effect": "Allow", "Principal": {"Service": "pods.eks.amazonaws.com"}, "Action": "sts:AssumeRole"}],
+    }
+)
+
+
+@pulumi.runtime.test
+def test_role_helper_sets_path_and_boundary():
+    role = bsky_iam.role("helper-check", assume_role_policy=_TRUST)
+
+    def check(args):
+        path, boundary = args
+        assert path == "/bsky/"
+        assert boundary == "arn:aws:iam::123456789012:policy/bsky-workload-boundary"
+
+    return pulumi.Output.all(role.path, role.permissions_boundary).apply(check)
+
+
+def test_helpers_refuse_scope_overrides():
+    with pytest.raises(ValueError):
+        bsky_iam.role("bad", assume_role_policy=_TRUST, path="/")
+    with pytest.raises(ValueError):
+        bsky_iam.role("bad", assume_role_policy=_TRUST, permissions_boundary=None)
+    with pytest.raises(ValueError):
+        bsky_iam.policy("bad", policy="{}", path="/")
+
+
+def test_every_iam_resource_in_delegated_scope():
+    # Registration is async, so this runs after the resource tests above; it
+    # also catches any Role or Policy created without bsky_iam.
+    roles, policies = (mocks.iam[t] for t in IAM_TYPES)
+    assert policies, "expected at least the loader policy"
+    assert roles, "expected at least the helper-check role"
+    for p in policies:
+        assert p.get("path") == "/bsky/", p
+    for r in roles:
+        assert r.get("path") == "/bsky/", r
+        assert r.get("permissionsBoundary") == "arn:aws:iam::123456789012:policy/bsky-workload-boundary", r

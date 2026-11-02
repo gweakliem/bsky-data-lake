@@ -11,4 +11,5 @@ It long-polls the SQS queue from `infra/` of S3 ObjectCreated notifications and 
 - **Delivery:** messages are deleted only after the Iceberg commit. Redelivered files are skipped by checking `source_file` in the table.
 - **Notification filter:** the S3 notification filters on the ingestor's prefix and `.parquet`. Iceberg tables live in the separate warehouse bucket, so the loader's own writes never trigger it. Keep it that way.
 - **Sail constraints:** no `input_file_name()` (files are tagged with `F.lit`), Glue tables need an explicit `LOCATION`, and no streaming.
+- **Session idle timeout:** Sail removes a session after `spark.session_timeout_secs` (default 900) without requests, and the loader holds a single session. The embedded server defaults `SAIL_SPARK__SESSION_TIMEOUT_SECS` to a year. With `--spark-remote`, the remote server's setting applies.
 - **Tests:** they use Sail's in-memory catalog with `file://` table locations.

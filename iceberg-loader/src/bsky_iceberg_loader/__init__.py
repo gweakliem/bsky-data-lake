@@ -74,6 +74,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+def aws_region() -> str | None:
+    # boto3 reads AWS_DEFAULT_REGION and ~/.aws/config but not AWS_REGION, which
+    # is what containers (and Sail) are given.
+    return os.environ.get("AWS_REGION") or boto3.session.Session().region_name
+
+
 def connect_spark(args: argparse.Namespace) -> tuple[SparkSession, object | None]:
     if args.spark_remote:
         log.info("connecting to Sail at %s", args.spark_remote)
@@ -83,8 +89,10 @@ def connect_spark(args: argparse.Namespace) -> tuple[SparkSession, object | None
 
     # The embedded server reads its catalog config from the environment.
     if "SAIL_CATALOG__LIST" not in os.environ:
-        region = os.environ.get("AWS_REGION") or boto3.session.Session().region_name
-        os.environ["SAIL_CATALOG__LIST"] = f'[{{type="glue", name="{args.catalog}", region="{region}"}}]'
+        os.environ["SAIL_CATALOG__LIST"] = f'[{{type="glue", name="{args.catalog}", region="{aws_region()}"}}]'
+    # Sail drops a session after 15 idle minutes, and the loader holds one session
+    # for its lifetime, so a quiet queue would break every later batch.
+    os.environ.setdefault("SAIL_SPARK__SESSION_TIMEOUT_SECS", str(365 * 24 * 3600))
     server = SparkConnectServer()
     server.start()
     _, port = server.listening_address
@@ -106,7 +114,8 @@ def main(argv: list[str] | None = None) -> int:
         loader.ensure_table()
         log.info("loading into %s at %s", args.table, args.table_location)
 
-        s3 = boto3.client("s3")
+        region = aws_region()
+        s3 = boto3.client("s3", region_name=region)
 
         def object_exists(obj: S3Object) -> bool:
             try:
@@ -118,7 +127,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise
 
         consumer = QueueConsumer(
-            boto3.client("sqs"),
+            boto3.client("sqs", region_name=region),
             args.queue_url,
             loader,
             object_exists=object_exists,

@@ -14,7 +14,7 @@ Run the ingestor, the Iceberg loader and the pipeline jobs from [data-pipeline.m
 | `bsky-classify` | CronJob | hourly, after silver | warehouse S3, Glue, TypeSafe API key |
 | `bsky-embed` | CronJob | hourly, after silver | warehouse S3, Glue; GPU node if E1 picks a model that needs one |
 | search API (E3) | Deployment + Service | 1–2 | warehouse S3 (index) read |
-| table maintenance | CronJob | nightly | Athena, Glue, warehouse S3 |
+| table maintenance | Glue table optimizers (managed) | continuous | Glue, warehouse S3 |
 
 **Why `Recreate` and exactly one replica for the ingestor:** Jetstream is a single stream, so a second replica writes duplicate data, and a rolling update would briefly run two. The restart gap is covered by cursor resume (P1). The pipeline's dedup handles the overlap.
 
@@ -185,7 +185,7 @@ D4 is split so the loader, which recovers easily, is the first workload deployed
     - silver reads bronze and writes silver;
     - the support jobs read silver and write only their own tables;
     - the search API reads the index only.
-  - An Athena workgroup with a results location in the warehouse bucket (a separate prefix, outside the Iceberg tables), plus a maintenance role.
+  - An Athena workgroup (results in a separate prefix of the warehouse bucket) only if ad hoc SQL is wanted. Maintenance doesn't need it.
 - **Secrets:** the TypeSafe API key.
   - Store it in AWS Secrets Manager, set once by hand or through `pulumi config set --secret`.
   - Deliver it to the classify job through the Secrets Store CSI driver or External Secrets Operator. A plain Kubernetes Secret created by Pulumi from a secret config value is the simpler option.
@@ -198,15 +198,13 @@ D4 is split so the loader, which recovers easily, is the first workload deployed
 - **File sizes (measured 2026-11-02):** the loader writes one Iceberg data file per raw file. By then the bronze table had 2,101 files of ~1.5 MB for 20.8M records, plus a snapshot per commit. Fixes, in order:
   1. Larger raw files: done in D4b (~16 MB).
   2. **Loader:** done (2026-11-02). Each commit is repartitioned by `day`/`hour`, giving one file per hour partition, and commits are capped at 128 MB of input (`--max-load-mb`) to bound memory.
-  3. **Compaction:** on closed hour partitions, hourly. An hour of the firehose is about 270 MB, close to the ideal file size, so one file per hour is the target.
-- **Table maintenance (hourly compaction, nightly vacuum):**
-  - for each Iceberg table, run Athena `OPTIMIZE <table> REWRITE DATA USING BIN_PACK WHERE day = … AND hour = …` on the previous hour, and nightly `VACUUM <table>`, which expires old snapshots and removes orphan files;
-  - EventBridge Scheduler can call Athena's `StartQueryExecution` directly, so no CronJob or compute is needed. Use a CronJob only if the job needs logic (e.g. picking partitions);
-  - set the snapshot retention properties on each table at creation.
+  3. **Compaction:** by the catalog, below.
+- **Table maintenance: Glue's managed table optimizers** (done 2026-11-02, data stack). Compaction (binpack, `min_input_files` 10, since an hour partition gets ~17 files), snapshot retention (3 days, at least 10, deleting expired files), and orphan file deletion (3 days). All run under one role, `bsky-table-optimizer`, and log to `/aws-glue/iceberg-*/logs` with 14-day retention. Tables are listed in `optimizedTables`; add silver and support tables there once their jobs have created them.
+  - **Why the catalog and not the pipeline:** maintenance stays out of the workflow code. Moving off AWS means replacing the catalog anyway, and the managed alternatives include equivalent maintenance (R2 Data Catalog has automatic compaction and snapshot expiration). So maintenance moves with the catalog, in infra.
+  - **Rejected:** Athena `OPTIMIZE`/`VACUUM`, because it adds an AWS-only engine to the workflow. Iceberg's native procedures (`rewrite_data_files`, `expire_snapshots`) are portable, but Sail 0.7.2 can't run them (`CALL` is a parse error), so they would need a Spark or Trino job just for maintenance. They're the fallback for a catalog without managed maintenance.
   - **Raw bucket:** don't compact it. After loading, raw files only serve replays, so add a lifecycle rule that expires `jetstream/` objects after 7–14 days (data stack).
-  - **Decide:** if Sail gains Iceberg's `rewrite_data_files` and `expire_snapshots` procedures, compare it with Athena; otherwise Athena it is. Confirm Athena can OPTIMIZE tables written by Sail (format version and properties).
 - **KEDA (optional):** install it as a Helm release from the apps project, with a `ScaledObject` scaling the loader on SQS `ApproximateNumberOfMessages`. Useful for backfills; skip it until a backfill needs it.
-- **Acceptance:** each CronJob runs on schedule and processes its watermark range. Maintenance reduces the file count in a day partition, and VACUUM removes expired snapshot files.
+- **Acceptance:** each CronJob runs on schedule and processes its watermark range. The optimizers reduce the file count per hour partition and the snapshot count, and expired files are deleted.
 
 ## WP D6: observability, alarms and cost controls
 
@@ -240,4 +238,4 @@ Write these alongside D4–D6 in `docs/runbooks/`:
 
 ## Costs to expect (dev, rough)
 
-Fixed costs: the EKS control plane (~$73/month), one NAT gateway (~$32/month plus data), and small always-on nodes for the ingestor and loader. Variable costs: Jev input tokens (the C2 estimate), GPU time for embeddings if used, Athena maintenance scans, and S3 storage. Revisit after a month of running. If the semantic workloads stay small, ECS Fargate for the two always-on services is the cheaper fallback.
+Fixed costs: the EKS control plane (~$73/month), one NAT gateway (~$32/month plus data), and small always-on nodes for the ingestor and loader. Variable costs: Jev input tokens (the C2 estimate), GPU time for embeddings if used, Glue optimizer DPU-hours, and S3 storage. Revisit after a month of running. If the semantic workloads stay small, ECS Fargate for the two always-on services is the cheaper fallback.

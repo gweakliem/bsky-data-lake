@@ -30,6 +30,9 @@ glue_database = config.get("glueDatabase") or "bsky_raw"
 visibility_timeout = config.get_int("visibilityTimeout") or 600
 max_receive_count = config.get_int("maxReceiveCount") or 5
 manage_iam = config.get_bool("manageIam", True)
+# Iceberg tables in the raw database that Glue's table optimizers maintain.
+# The loader creates the tables, so add one here only once it exists.
+optimized_tables = config.get_object("optimizedTables") or ["jetstream"]
 
 account_id = aws.get_caller_identity_output().account_id
 region = aws.get_region_output().region
@@ -187,6 +190,49 @@ ingestor_policy_document = json.dumps(
 )
 
 
+table_optimizer_policy_document = pulumi.Output.all(account_id, region).apply(
+    lambda args: json.dumps(
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Sid": "RewriteTableFiles",
+                    "Effect": "Allow",
+                    "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+                    "Resource": f"{warehouse_bucket_arn}/iceberg/*",
+                },
+                {
+                    "Sid": "ListTableFiles",
+                    "Effect": "Allow",
+                    "Action": "s3:ListBucket",
+                    "Resource": warehouse_bucket_arn,
+                    "Condition": {"StringLike": {"s3:prefix": ["iceberg/*"]}},
+                },
+                {
+                    "Sid": "CommitToCatalog",
+                    "Effect": "Allow",
+                    "Action": ["glue:GetTable", "glue:UpdateTable"],
+                    "Resource": [
+                        f"arn:aws:glue:{args[1]}:{args[0]}:catalog",
+                        f"arn:aws:glue:{args[1]}:{args[0]}:database/{glue_database}",
+                        f"arn:aws:glue:{args[1]}:{args[0]}:table/{glue_database}/*",
+                    ],
+                },
+                {
+                    "Sid": "WriteOptimizerLogs",
+                    "Effect": "Allow",
+                    "Action": ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"],
+                    "Resource": [
+                        f"arn:aws:logs:{args[1]}:{args[0]}:log-group:/aws-glue/iceberg-{kind}/logs:*"
+                        for kind in ["compaction", "retention", "orphan-file-deletion"]
+                    ],
+                },
+            ],
+        }
+    )
+)
+
+
 def _pod_role(resource_name: str, name: str, description: str) -> aws.iam.Role:
     """A role assumed through EKS Pod Identity. The association to a service
     account lives in the platform stack."""
@@ -235,6 +281,94 @@ if manage_iam:
     aws.iam.RolePolicyAttachment("ingestor", role=ingestor_role.name, policy_arn=ingestor_policy.arn)
     pulumi.export("ingestor_role_arn", ingestor_role.arn)
 
+    # --- Glue table optimizers: compaction, snapshot retention, orphan files ---
+    # Maintenance runs in the catalog rather than the pipeline, so moving to
+    # another catalog (R2 Data Catalog, BigLake, ...) swaps it with the catalog.
+
+    optimizer_log_groups = {
+        kind: aws.cloudwatch.LogGroup(
+            f"glue-{kind}",
+            name=f"/aws-glue/iceberg-{kind}/logs",
+            retention_in_days=14,
+        )
+        for kind in ["compaction", "retention", "orphan-file-deletion"]
+    }
+
+    optimizer_policy = bsky_iam.policy(
+        "table-optimizer",
+        name="bsky-table-optimizer",
+        description="Compact and expire the lake's Iceberg tables",
+        policy=table_optimizer_policy_document,
+    )
+    optimizer_role = bsky_iam.role(
+        "table-optimizer",
+        name="bsky-table-optimizer",
+        description="Assumed by Glue's Iceberg table optimizers",
+        assume_role_policy=json.dumps(
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {"Effect": "Allow", "Principal": {"Service": "glue.amazonaws.com"}, "Action": "sts:AssumeRole"}
+                ],
+            }
+        ),
+    )
+    optimizer_attachment = aws.iam.RolePolicyAttachment(
+        "table-optimizer", role=optimizer_role.name, policy_arn=optimizer_policy.arn
+    )
+
+    def _optimizer_configs(role_arn: pulumi.Output[str]) -> dict[str, aws.glue.CatalogTableOptimizerConfigurationArgs]:
+        return {
+            "compaction": aws.glue.CatalogTableOptimizerConfigurationArgs(
+                role_arn=role_arn,
+                enabled=True,
+                compaction_configuration=aws.glue.CatalogTableOptimizerConfigurationCompactionConfigurationArgs(
+                    iceberg_configuration=aws.glue.CatalogTableOptimizerConfigurationCompactionConfigurationIcebergConfigurationArgs(
+                        strategy="binpack",
+                        # The default of 100 never triggers: an hour partition
+                        # gets ~17 files of ~16 MB.
+                        min_input_files=config.get_int("compactionMinInputFiles") or 10,
+                    )
+                ),
+            ),
+            "retention": aws.glue.CatalogTableOptimizerConfigurationArgs(
+                role_arn=role_arn,
+                enabled=True,
+                retention_configuration=aws.glue.CatalogTableOptimizerConfigurationRetentionConfigurationArgs(
+                    iceberg_configuration=aws.glue.CatalogTableOptimizerConfigurationRetentionConfigurationIcebergConfigurationArgs(
+                        # ~400 snapshots a day (one per loader commit).
+                        snapshot_retention_period_in_days=config.get_int("snapshotRetentionDays") or 3,
+                        number_of_snapshots_to_retain=10,
+                        # Otherwise files replaced by compaction are never deleted.
+                        clean_expired_files=True,
+                    )
+                ),
+            ),
+            "orphan_file_deletion": aws.glue.CatalogTableOptimizerConfigurationArgs(
+                role_arn=role_arn,
+                enabled=True,
+                orphan_file_deletion_configuration=aws.glue.CatalogTableOptimizerConfigurationOrphanFileDeletionConfigurationArgs(
+                    iceberg_configuration=aws.glue.CatalogTableOptimizerConfigurationOrphanFileDeletionConfigurationIcebergConfigurationArgs(
+                        orphan_file_retention_period_in_days=3,
+                    )
+                ),
+            ),
+        }
+
+    table_optimizers = {
+        (table, kind): aws.glue.CatalogTableOptimizer(
+            f"{table}-{kind.replace('_', '-')}",
+            catalog_id=account_id,
+            database_name=database.name,
+            table_name=table,
+            type=kind,
+            configuration=configuration,
+            opts=pulumi.ResourceOptions(depends_on=[optimizer_attachment, *optimizer_log_groups.values()]),
+        )
+        for table in optimized_tables
+        for kind, configuration in _optimizer_configs(optimizer_role.arn).items()
+    }
+
 pulumi.export("queue_url", queue.url)
 pulumi.export("dead_letter_queue_url", dlq.url)
 pulumi.export("glue_database", database.name)
@@ -242,3 +376,4 @@ pulumi.export("raw_location", f"s3://{bucket}/{raw_prefix.rstrip('/')}")
 pulumi.export("raw_table_location", f"{warehouse}/{glue_database}/jetstream")
 pulumi.export("loader_policy_document", loader_policy_document)
 pulumi.export("ingestor_policy_document", ingestor_policy_document)
+pulumi.export("table_optimizer_policy_document", table_optimizer_policy_document)

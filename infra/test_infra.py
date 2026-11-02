@@ -16,6 +16,7 @@ class Mocks(pulumi.runtime.Mocks):
     def __init__(self):
         # Inputs of every IAM role and policy registered, by type.
         self.iam: dict[str, list[dict]] = {t: [] for t in IAM_TYPES}
+        self.optimizers: list[dict] = []
 
     def new_resource(self, args: pulumi.runtime.MockResourceArgs):
         state = dict(args.inputs)
@@ -23,6 +24,8 @@ class Mocks(pulumi.runtime.Mocks):
         if args.typ == "aws:sqs/queue:Queue":
             state["arn"] = f"arn:aws:sqs:us-west-2:123456789012:{name}"
             state["url"] = f"https://sqs.us-west-2.amazonaws.com/123456789012/{name}"
+        elif args.typ == "aws:glue/catalogTableOptimizer:CatalogTableOptimizer":
+            self.optimizers.append(state)
         elif args.typ in IAM_TYPES:
             self.iam[args.typ].append(state)
             kind = args.typ.rsplit(":", 1)[1].lower()
@@ -195,3 +198,39 @@ def test_ingestor_role_for_pod_identity():
         assert arn == "arn:aws:iam::123456789012:role/bsky/bsky-ingestor"
 
     return pulumi.Output.all(infra.ingestor_role.assume_role_policy, infra.ingestor_role.arn).apply(check)
+
+
+
+@pulumi.runtime.test
+def test_table_optimizer_policy_scopes():
+    def check(policy):
+        stmts = {s["Sid"]: s for s in json.loads(policy)["Statement"]}
+        # Only the Iceberg tables, never the raw bucket.
+        assert stmts["RewriteTableFiles"]["Resource"] == "arn:aws:s3:::test-warehouse/iceberg/*"
+        assert stmts["ListTableFiles"]["Condition"] == {"StringLike": {"s3:prefix": ["iceberg/*"]}}
+        assert "arn:aws:glue:us-west-2:123456789012:table/bsky_raw/*" in stmts["CommitToCatalog"]["Resource"]
+        assert all("/aws-glue/iceberg-" in r for r in stmts["WriteOptimizerLogs"]["Resource"])
+
+    return infra.table_optimizer_policy_document.apply(check)
+
+
+@pulumi.runtime.test
+def test_table_optimizers_for_raw_table():
+    def check(args):
+        trust, role_arn = args
+        (stmt,) = json.loads(trust)["Statement"]
+        assert stmt["Principal"] == {"Service": "glue.amazonaws.com"}
+        by_type = {o["type"]: o for o in mocks.optimizers}
+        assert sorted(by_type) == ["compaction", "orphan_file_deletion", "retention"]
+        for o in by_type.values():
+            assert (o["databaseName"], o["tableName"]) == ("bsky_raw", "jetstream")
+            assert o["configuration"]["roleArn"] == role_arn
+            assert o["configuration"]["enabled"] is True
+        compaction = by_type["compaction"]["configuration"]["compactionConfiguration"]["icebergConfiguration"]
+        # The default (100) never triggers for an hour partition.
+        assert compaction["minInputFiles"] == 10
+        retention = by_type["retention"]["configuration"]["retentionConfiguration"]["icebergConfiguration"]
+        assert retention["cleanExpiredFiles"] is True
+
+    role = infra.optimizer_role
+    return pulumi.Output.all(role.assume_role_policy, role.arn).apply(check)

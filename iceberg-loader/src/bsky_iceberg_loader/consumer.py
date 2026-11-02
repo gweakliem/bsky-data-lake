@@ -126,15 +126,18 @@ class QueueConsumer:
         # on the queue, and on redelivery the committed files are skipped.
         for chunk in self._chunks(present):
             uris = [self.uri_for(obj) for obj in chunk]
+            started = time.monotonic()
             try:
                 loaded = self.loader.load(uris)
             except Exception:
                 log.exception("failed to load %d file(s); will retry after visibility timeout", len(uris))
                 return False
             log.info(
-                "appended %d file(s) to %s (%d already loaded)",
+                "appended %d file(s), %.0f MB, to %s in %.1f s (%d already loaded)",
                 len(loaded),
+                sum(obj.size for obj in chunk) / 1e6,
                 self.loader.table,
+                time.monotonic() - started,
                 len(uris) - len(loaded),
             )
         self._delete(done)

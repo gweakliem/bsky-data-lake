@@ -88,3 +88,11 @@ def test_ensure_table_is_idempotent(loader, tmp_path):
     loader.load([uri])
     loader.ensure_table()
     assert len(rows(loader)) == 1
+
+
+def test_already_loaded_check_spans_each_hour_in_the_batch(loader, tmp_path):
+    a = write_raw_file(tmp_path / "src/a.parquet", [utc(2026, 10, 22, 6, 0)])
+    b = write_raw_file(tmp_path / "src/b.parquet", [utc(2026, 10, 23, 7, 0)])
+    loader.load([a, b])
+    # Both hours, on different days, must be checked for duplicates.
+    assert loader.load([a, b]) == []

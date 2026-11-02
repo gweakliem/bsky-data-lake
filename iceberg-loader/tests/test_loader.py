@@ -43,6 +43,31 @@ def test_multiple_files_in_one_commit(loader, tmp_path):
     assert len(snapshots) == 1
 
 
+def test_one_data_file_per_hour_per_commit(loader, tmp_path):
+    # Five source files, the middle one spanning the hour boundary.
+    uris = [
+        write_raw_file(tmp_path / f"src/{i}.parquet", times)
+        for i, times in enumerate(
+            [
+                [utc(2026, 10, 22, 6, 50)],
+                [utc(2026, 10, 22, 6, 55)],
+                [utc(2026, 10, 22, 6, 59), utc(2026, 10, 22, 7, 0, 1)],
+                [utc(2026, 10, 22, 7, 5)],
+                [utc(2026, 10, 22, 7, 10)],
+            ]
+        )
+    ]
+    loader.load(uris)
+
+    data = tmp_path / "table/data"
+    per_hour = {}
+    for p in data.rglob("*.parquet"):
+        hour = p.parent.relative_to(data).as_posix()
+        per_hour[hour] = per_hour.get(hour, 0) + 1
+    assert per_hour == {"day=2026-10-22/hour=6": 1, "day=2026-10-22/hour=7": 1}
+    assert len(rows(loader)) == 6
+
+
 def test_skips_files_already_loaded(loader, tmp_path):
     a = write_raw_file(tmp_path / "src/a.parquet", [utc(2026, 10, 22, 6, 0)])
     b = write_raw_file(tmp_path / "src/b.parquet", [utc(2026, 10, 22, 6, 5)])

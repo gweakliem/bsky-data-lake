@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import unquote_plus
 
 
@@ -11,6 +11,8 @@ from urllib.parse import unquote_plus
 class S3Object:
     bucket: str
     key: str
+    # Bytes, from the notification; 0 if it didn't say. Not part of identity.
+    size: int = field(default=0, compare=False)
 
     @property
     def uri(self) -> str:
@@ -56,7 +58,7 @@ def parse_message(body: str) -> list[S3Object]:
                 key = unquote_plus(record["s3"]["object"]["key"])
             except (KeyError, TypeError) as e:
                 raise MalformedMessage(f"S3 record missing {e}") from e
-            objects.append(S3Object(bucket, key))
+            objects.append(S3Object(bucket, key, record["s3"]["object"].get("size") or 0))
         return objects
 
     if doc.get("source") == "aws.s3":
@@ -64,7 +66,8 @@ def parse_message(body: str) -> list[S3Object]:
             return []
         try:
             # EventBridge keys are not URL-encoded.
-            return [S3Object(doc["detail"]["bucket"]["name"], doc["detail"]["object"]["key"])]
+            obj = doc["detail"]["object"]
+            return [S3Object(doc["detail"]["bucket"]["name"], obj["key"], obj.get("size") or 0)]
         except (KeyError, TypeError) as e:
             raise MalformedMessage(f"EventBridge event missing {e}") from e
 

@@ -23,14 +23,15 @@ class FakeSQS:
         return {"Successful": [{"Id": e["Id"]} for e in Entries], "Failed": []}
 
 
-def message(n, *keys, bucket="bucket"):
+def message(n, *keys, bucket="bucket", size=None):
+    obj = {} if size is None else {"size": size}
     body = json.dumps(
         {
             "Records": [
                 {
                     "eventSource": "aws:s3",
                     "eventName": "ObjectCreated:Put",
-                    "s3": {"bucket": {"name": bucket}, "object": {"key": key}},
+                    "s3": {"bucket": {"name": bucket}, "object": {"key": key, **obj}},
                 }
                 for key in keys
             ]
@@ -143,3 +144,48 @@ def test_receive_batch_respects_max_messages(loader, bucket_dir):
 def test_s3object_default_uri(loader):
     consumer = QueueConsumer(FakeSQS([]), "q", loader, object_exists=lambda o: True)
     assert consumer.uri_for(S3Object("b", "k")) == "s3://b/k"
+
+
+def sized_files(bucket_dir, n):
+    keys = [f"jetstream/date=2026-10-22/hour=06/{i}.parquet" for i in range(n)]
+    uris = [write_raw_file(bucket_dir / k, [utc(2026, 10, 22, 6, i)]) for i, k in enumerate(keys)]
+    return keys, uris
+
+
+def test_large_batches_load_in_byte_capped_commits(loader, bucket_dir):
+    keys, uris = sized_files(bucket_dir, 5)
+    sqs = FakeSQS([message(i, k, size=60) for i, k in enumerate(keys)])
+    consumer = make_consumer(sqs, loader, bucket_dir, max_load_bytes=150)
+    commits = []
+    load = loader.load
+    loader.load = lambda u: commits.append(len(u)) or load(u)
+
+    assert consumer.process(consumer.receive_batch()) is True
+    assert commits == [2, 2, 1]
+    assert table_files(loader) == sorted(uris)
+    assert len(sqs.deleted) == 5
+
+
+def test_failed_chunk_keeps_messages_and_retry_skips_committed(loader, bucket_dir):
+    keys, uris = sized_files(bucket_dir, 4)
+    msgs = [message(i, k, size=60) for i, k in enumerate(keys)]
+    consumer = make_consumer(FakeSQS([]), loader, bucket_dir, max_load_bytes=120)
+    load = loader.load
+    calls = []
+
+    def flaky(u):
+        calls.append(u)
+        if len(calls) == 2:
+            raise RuntimeError("boom")
+        return load(u)
+
+    loader.load = flaky
+    assert consumer.process(msgs) is False
+    assert consumer.sqs.deleted == []
+    assert table_files(loader) == sorted(uris[:2])
+
+    # Redelivery: the first chunk's files are skipped, the rest load once.
+    assert consumer.process(msgs) is True
+    rows = loader.spark.table(loader.table).select("source_file").collect()
+    assert sorted(r.source_file for r in rows) == sorted(uris)
+    assert len(consumer.sqs.deleted) == 4

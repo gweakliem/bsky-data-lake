@@ -197,7 +197,7 @@ D4 is split so the loader, which recovers easily, is the first workload deployed
   - The search API (E3) as a Deployment with a ClusterIP Service. External exposure is out of scope.
 - **File sizes (measured 2026-11-02):** the loader writes one Iceberg data file per raw file. By then the bronze table had 2,101 files of ~1.5 MB for 20.8M records, plus a snapshot per commit. Fixes, in order:
   1. Larger raw files: done in D4b (~16 MB).
-  2. **Loader:** repartition by the `day`/`hour` partition columns before the append, so a commit writes one file per hour partition rather than one per input file. This matters most for backlogs and replays, where a commit takes 100 files.
+  2. **Loader:** done (2026-11-02). Each commit is repartitioned by `day`/`hour`, giving one file per hour partition, and commits are capped at 128 MB of input (`--max-load-mb`) to bound memory.
   3. **Compaction:** on closed hour partitions, hourly. An hour of the firehose is about 270 MB, close to the ideal file size, so one file per hour is the target.
 - **Table maintenance (hourly compaction, nightly vacuum):**
   - for each Iceberg table, run Athena `OPTIMIZE <table> REWRITE DATA USING BIN_PACK WHERE day = … AND hour = …` on the previous hour, and nightly `VACUUM <table>`, which expires old snapshots and removes orphan files;

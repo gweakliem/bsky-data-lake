@@ -24,6 +24,11 @@ class QueueConsumer:
     expires (and land in the queue's dead-letter queue, if configured, after
     its max receive count). Redelivered files that were already committed are
     skipped by the loader.
+
+    A batch's files are loaded in commits of at most `max_load_bytes` (by the
+    sizes in the notifications), because Sail's write path holds several
+    times the input in memory. A file larger than the cap gets a commit of
+    its own.
     """
 
     def __init__(
@@ -37,6 +42,7 @@ class QueueConsumer:
         source_prefix: str = "",
         suffix: str = ".parquet",
         max_messages: int = 100,
+        max_load_bytes: int = 128 * 2**20,
         batch_window: float = 30.0,
         wait_time: int = 20,
     ):
@@ -48,6 +54,7 @@ class QueueConsumer:
         self.source_prefix = source_prefix
         self.suffix = suffix
         self.max_messages = max_messages
+        self.max_load_bytes = max_load_bytes
         self.batch_window = batch_window
         self.wait_time = wait_time
 
@@ -115,14 +122,15 @@ class QueueConsumer:
             else:
                 log.warning("skipping %s: object no longer exists", obj.uri)
 
-        uris = [self.uri_for(obj) for obj in present]
-        try:
-            loaded = self.loader.load(uris)
-        except Exception:
-            log.exception("failed to load %d file(s); will retry after visibility timeout", len(uris))
-            return False
-
-        if uris:
+        # Each chunk is its own commit. If a later one fails, the messages stay
+        # on the queue, and on redelivery the committed files are skipped.
+        for chunk in self._chunks(present):
+            uris = [self.uri_for(obj) for obj in chunk]
+            try:
+                loaded = self.loader.load(uris)
+            except Exception:
+                log.exception("failed to load %d file(s); will retry after visibility timeout", len(uris))
+                return False
             log.info(
                 "appended %d file(s) to %s (%d already loaded)",
                 len(loaded),
@@ -131,6 +139,17 @@ class QueueConsumer:
             )
         self._delete(done)
         return True
+
+    def _chunks(self, objects: list[S3Object]) -> list[list[S3Object]]:
+        chunks: list[list[S3Object]] = []
+        size = 0
+        for obj in objects:
+            if not chunks or size + obj.size > self.max_load_bytes:
+                chunks.append([])
+                size = 0
+            chunks[-1].append(obj)
+            size += obj.size
+        return chunks
 
     def _delete(self, messages: list[dict]) -> None:
         for i in range(0, len(messages), SQS_MAX_BATCH):

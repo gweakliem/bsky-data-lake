@@ -9,6 +9,7 @@ uv run bsky-iceberg-loader --once               # one SQS batch against real AWS
 
 It long-polls the SQS queue from `infra/` of S3 ObjectCreated notifications and appends the referenced files to the Iceberg table `glue.bsky_raw.jetstream`, partitioned by identity columns `day`/`hour` (UTC of `received_at`), via PySpark over Spark Connect to Sail.
 - **Delivery:** messages are deleted only after the Iceberg commit. Redelivered files are skipped by checking `source_file` in the table.
+- **Commit size:** each commit is repartitioned by `day`/`hour`, so it writes one data file per hour partition. A batch is split into commits of at most `--max-load-mb` (128) of source files, by the sizes in the notifications, because Sail's write path peaks at about 7× the compressed input (measured: 313 MB in, 2.3 GB RSS). Raise the pod's memory limit before raising the cap.
 - **Notification filter:** the S3 notification filters on the ingestor's prefix and `.parquet`. Iceberg tables live in the separate warehouse bucket, so the loader's own writes never trigger it. Keep it that way.
 - **Sail constraints:** no `input_file_name()` (files are tagged with `F.lit`), Glue tables need an explicit `LOCATION`, and no streaming.
 - **Session idle timeout:** Sail removes a session after `spark.session_timeout_secs` (default 900) without requests, and the loader holds a single session. The embedded server defaults `SAIL_SPARK__SESSION_TIMEOUT_SECS` to a year. With `--spark-remote`, the remote server's setting applies.

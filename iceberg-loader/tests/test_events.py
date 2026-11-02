@@ -70,3 +70,28 @@ def test_malformed(body):
 
 def test_uri():
     assert S3Object("b", "a/k.parquet").uri == "s3://b/a/k.parquet"
+
+
+def test_sizes_are_parsed_but_not_identity():
+    body = json.dumps(
+        {
+            "Records": [
+                {
+                    "eventSource": "aws:s3",
+                    "eventName": "ObjectCreated:Put",
+                    "s3": {"bucket": {"name": "b"}, "object": {"key": "k", "size": 1234}},
+                }
+            ]
+        }
+    )
+    (obj,) = parse_message(body)
+    assert obj.size == 1234
+    assert obj == S3Object("b", "k")
+    eb = json.dumps(
+        {
+            "source": "aws.s3",
+            "detail-type": "Object Created",
+            "detail": {"bucket": {"name": "b"}, "object": {"key": "k", "size": 99}},
+        }
+    )
+    assert parse_message(eb)[0].size == 99

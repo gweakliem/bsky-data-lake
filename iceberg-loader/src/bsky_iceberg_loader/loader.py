@@ -67,7 +67,9 @@ class RawTableLoader:
 
         new = [u for u in uris if u not in loaded]
         if new:
-            df.writeTo(self.table).append()
+            # Without this, each source file becomes its own data file. Grouping
+            # by the partition columns gives each hour one task, so one file.
+            df.repartition("day", "hour").writeTo(self.table).append()
         return new
 
     def _read(self, uris: list[str]) -> DataFrame:

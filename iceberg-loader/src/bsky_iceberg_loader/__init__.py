@@ -65,6 +65,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument("--max-messages", type=int, default=100, help="Max SQS messages per batch (default: %(default)s)")
     p.add_argument(
+        "--max-load-mb",
+        type=int,
+        default=128,
+        help="Max MB of source files per Iceberg commit; bounds memory (default: %(default)s)",
+    )
+    p.add_argument(
         "--batch-window",
         type=float,
         default=30.0,
@@ -133,6 +139,7 @@ def main(argv: list[str] | None = None) -> int:
             object_exists=object_exists,
             source_prefix=args.source_prefix,
             max_messages=args.max_messages,
+            max_load_bytes=args.max_load_mb * 2**20,
             batch_window=args.batch_window,
         )
 

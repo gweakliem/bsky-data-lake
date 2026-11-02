@@ -30,6 +30,17 @@ Bucket names come from `BSKY_BUCKET` and `BSKY_WAREHOUSE_BUCKET`, and the raw pr
 | `bsky-data-lake:maxReceiveCount` | `5` |
 | `bsky-data-lake:manageIam` | `true`. Set `false` in an account without the IAM delegation below; an admin then creates the policy from `loader_policy_document` |
 
+## Related projects
+
+This is the data stack. Two more Pulumi projects build on it, each in its own directory with its own uv environment and `dev` stack, using the same state backend and passphrase:
+
+| Project | Directory | Contents |
+|---|---|---|
+| `bsky-platform` | [`platform/`](platform/) | VPC (2 AZs, one NAT gateway, S3 gateway endpoint), EKS Auto Mode cluster `bsky`, ECR repositories `bsky/<image>`, Pod Identity associations |
+| `bsky-apps` | [`apps/`](apps/) | Namespace `bsky`, service accounts, and the loader Deployment |
+
+Apply them in order: this stack, then `platform/`, then `apps/`. The platform stack needs `BSKY_EKS_PUBLIC_CIDRS` (who may reach the cluster's public API endpoint) in `.env`.
+
 ## IAM
 
 Pulumi runs with the `BskyDataLakeDeveloper` SSO permission set: `PowerUserAccess`, plus IAM rights limited to roles and policies under the path `/bsky/`, with every role required to carry the `bsky-workload-boundary` permissions boundary. An admin sets this up once; the policies, steps and verification commands are in [`iam-bootstrap/`](iam-bootstrap/README.md).

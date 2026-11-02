@@ -1,0 +1,9 @@
+config:
+  aws:region: us-west-2
+  aws:defaultTags:
+    tags:
+      project: bsky-data-lake
+      stack: platform
+  # The public API endpoint's allowed CIDRs come from BSKY_EKS_PUBLIC_CIDRS in
+  # the repo's .env, so the admin's address isn't committed.
+encryptionsalt: v1:qxs7KLsuaLo=:v1:q+oCgfWVHTqSdo25:ANgyeK9Mb5PCT9C3CVtyHQGpq17QxQ==

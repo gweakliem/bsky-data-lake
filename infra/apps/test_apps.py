@@ -1,0 +1,85 @@
+"""Checks the apps stack's resources using Pulumi mocks (no cluster or AWS calls)."""
+
+import importlib.util
+from pathlib import Path
+
+import pulumi
+
+REPO_URL = "123456789012.dkr.ecr.us-west-2.amazonaws.com/bsky/iceberg-loader"
+INGEST_REPO_URL = "123456789012.dkr.ecr.us-west-2.amazonaws.com/bsky/ingest"
+STACK_OUTPUTS = {
+    "kubeconfig": "{}",
+    "namespace": "bsky",
+    "repository_urls": {"iceberg-loader": REPO_URL, "ingest": INGEST_REPO_URL},
+    "queue_url": "https://sqs.us-west-2.amazonaws.com/123456789012/bsky-raw-files",
+    "raw_table_location": "s3://test-warehouse/iceberg/bsky_raw/jetstream",
+    "raw_location": "s3://test-bucket/jetstream",
+}
+
+
+class Mocks(pulumi.runtime.Mocks):
+    def new_resource(self, args: pulumi.runtime.MockResourceArgs):
+        if args.typ == "pulumi:pulumi:StackReference":
+            return f"{args.name}-id", {"outputs": STACK_OUTPUTS}
+        return f"{args.name}-id", dict(args.inputs)
+
+    def call(self, args: pulumi.runtime.MockCallArgs):
+        return {}
+
+
+pulumi.runtime.set_mocks(Mocks(), project="bsky-apps", stack="dev", preview=False)
+pulumi.runtime.set_config("bsky-apps:loaderImageTag", "abc1234")
+pulumi.runtime.set_config("bsky-apps:ingestImageTag", "def5678")
+
+_spec = importlib.util.spec_from_file_location("apps_stack", Path(__file__).with_name("__main__.py"))
+apps = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(apps)
+
+
+@pulumi.runtime.test
+def test_loader_deployment():
+    def check(spec):
+        assert spec["replicas"] == 1
+        assert spec["strategy"]["type"] == "Recreate"
+        pod = spec["template"]["spec"]
+        # Must match the platform stack's Pod Identity association.
+        assert pod["service_account_name"] == "iceberg-loader"
+        assert pod["termination_grace_period_seconds"] >= 60
+        (container,) = pod["containers"]
+        assert container["image"] == f"{REPO_URL}:abc1234"
+        env = {e["name"]: e["value"] for e in container["env"]}
+        assert env["BSKY_LOADER_QUEUE_URL"] == STACK_OUTPUTS["queue_url"]
+        assert env["BSKY_ICEBERG_LOCATION"] == STACK_OUTPUTS["raw_table_location"]
+        # No credentials: they come from Pod Identity.
+        assert not any(k.startswith("AWS_ACCESS") or k.startswith("AWS_SECRET") for k in env)
+
+    return apps.loader.spec.apply(check)
+
+
+@pulumi.runtime.test
+def test_loader_in_namespace():
+    def check(args):
+        deployment_ns, sa_ns = args
+        assert deployment_ns == sa_ns == "bsky"
+
+    return pulumi.Output.all(apps.loader.metadata.namespace, apps.loader_sa.metadata.namespace).apply(check)
+
+
+@pulumi.runtime.test
+def test_ingestor_deployment():
+    def check(spec):
+        assert spec["replicas"] == 1
+        assert spec["strategy"]["type"] == "Recreate"
+        pod = spec["template"]["spec"]
+        assert pod["service_account_name"] == "ingestor"
+        assert pod["termination_grace_period_seconds"] >= 60
+        (container,) = pod["containers"]
+        assert container["image"] == f"{INGEST_REPO_URL}:def5678"
+        env = {e["name"]: e["value"] for e in container["env"]}
+        assert env["BSKY_OUTPUT"] == STACK_OUTPUTS["raw_location"]
+        # Batches must fill before the interval flushes them.
+        assert int(env["BSKY_FLUSH_INTERVAL"]) >= 300
+        assert not any(k.startswith("AWS_ACCESS") or k.startswith("AWS_SECRET") for k in env)
+        assert container["security_context"]["run_as_user"] == 65532
+
+    return apps.ingestor.spec.apply(check)

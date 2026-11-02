@@ -1,0 +1,6 @@
+name: bsky-apps
+description: Kubernetes workloads for the Bluesky data lake on the platform stack's EKS cluster
+runtime:
+  name: python
+  options:
+    toolchain: uv

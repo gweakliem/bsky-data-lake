@@ -1,0 +1,17 @@
+[project]
+name = "bsky-data-lake-apps"
+description = "Pulumi stack for the data lake's Kubernetes workloads"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "pulumi>=3.273.0",
+    "pulumi-kubernetes>=4.34.2",
+]
+
+[tool.pytest.ini_options]
+filterwarnings = ["ignore::DeprecationWarning:pulumi.*"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]

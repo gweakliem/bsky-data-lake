@@ -157,6 +157,52 @@ loader_policy_document = pulumi.Output.all(queue.arn, account_id, region).apply(
     )
 )
 
+# --- IAM: the ingestor writes raw files, and lists and reads them to resume ---
+
+ingestor_policy_document = json.dumps(
+    {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Sid": "ListRawPrefix",
+                "Effect": "Allow",
+                "Action": "s3:ListBucket",
+                "Resource": bucket_arn,
+                "Condition": {"StringLike": {"s3:prefix": [f"{raw_prefix}*"]}},
+            },
+            {
+                "Sid": "ReadWriteRawFiles",
+                "Effect": "Allow",
+                "Action": ["s3:GetObject", "s3:PutObject"],
+                "Resource": f"{bucket_arn}/{raw_prefix}*",
+            },
+        ],
+    }
+)
+
+
+def _pod_role(resource_name: str, name: str, description: str) -> aws.iam.Role:
+    """A role assumed through EKS Pod Identity. The association to a service
+    account lives in the platform stack."""
+    return bsky_iam.role(
+        resource_name,
+        name=name,
+        description=description,
+        assume_role_policy=json.dumps(
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Principal": {"Service": "pods.eks.amazonaws.com"},
+                        "Action": ["sts:AssumeRole", "sts:TagSession"],
+                    }
+                ],
+            }
+        ),
+    )
+
+
 # Created through bsky_iam, which keeps it inside the delegated IAM scope (see
 # iam-bootstrap/). In an account without that delegation, turn manageIam off and
 # hand the exported document to an admin instead.
@@ -169,8 +215,24 @@ if manage_iam:
     )
     pulumi.export("loader_policy_arn", loader_policy.arn)
 
+    loader_role = _pod_role("iceberg-loader", "bsky-iceberg-loader", "EKS pod role for the Iceberg loader")
+    aws.iam.RolePolicyAttachment("iceberg-loader", role=loader_role.name, policy_arn=loader_policy.arn)
+    pulumi.export("loader_role_arn", loader_role.arn)
+
+    ingestor_policy = bsky_iam.policy(
+        "ingestor",
+        name="bsky-ingestor",
+        description="Write raw Jetstream files and read them back to resume",
+        policy=ingestor_policy_document,
+    )
+    ingestor_role = _pod_role("ingestor", "bsky-ingestor", "EKS pod role for the Jetstream ingestor")
+    aws.iam.RolePolicyAttachment("ingestor", role=ingestor_role.name, policy_arn=ingestor_policy.arn)
+    pulumi.export("ingestor_role_arn", ingestor_role.arn)
+
 pulumi.export("queue_url", queue.url)
 pulumi.export("dead_letter_queue_url", dlq.url)
 pulumi.export("glue_database", database.name)
+pulumi.export("raw_location", f"s3://{bucket}/{raw_prefix.rstrip('/')}")
 pulumi.export("raw_table_location", f"{warehouse}/{glue_database}/jetstream")
 pulumi.export("loader_policy_document", loader_policy_document)
+pulumi.export("ingestor_policy_document", ingestor_policy_document)

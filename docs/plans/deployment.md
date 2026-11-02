@@ -68,7 +68,10 @@ The dev SSO role (`PowerUserAccess`) can't create IAM roles or policies, so `man
 
 ## WP D1: containerize the components
 
-- **Depends on:** P1 (cursor resume) for the ingestor image to be safe to run unattended.
+**Status: loader image done (2026-10-31).** `iceberg-loader/Dockerfile`. The ingestor, silver and enrich images are still open.
+
+- **Depends on:** nothing for the loader image. P1 (cursor resume) before the ingestor image is used unattended (D4b).
+- **Order:** the `iceberg-loader` image comes first, for D4a. The others follow their WPs.
 - **Images:**
   - **`bsky-ingest`:** multi-stage Dockerfile at the repo root. Build with `cargo build --release` on a Rust image, run on a minimal base (distroless/cc or debian-slim).
   - **`iceberg-loader`, `silver`, `enrich`:** one Dockerfile per uv project, on python-slim with `uv sync --frozen --no-dev`.
@@ -78,14 +81,18 @@ The dev SSO role (`PowerUserAccess`) can't create IAM roles or policies, so `man
   - Configuration only through env vars, which all components already support.
   - No `.env` baked into images. Add a `.dockerignore` that excludes `.env`, `target/` and `.venv/`.
   - Each image runs as a non-root user and logs to stdout.
-- **Credentials:** confirm each component picks up Pod Identity credentials (`AWS_CONTAINER_CREDENTIALS_FULL_URI`).
+- **Credentials:** confirm each component picks up Pod Identity credentials (`AWS_CONTAINER_CREDENTIALS_FULL_URI` + `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE`).
   - boto3 and the AWS SDKs do.
-  - Check `object_store`'s `AmazonS3Builder::from_env` and Sail's S3/Glue client explicitly.
-  - If either only supports IRSA (web identity), use IRSA for that workload instead.
-- **Architecture:** **Decide:** arm64 (Graviton, cheaper) or amd64. Pick arm64 unless a dependency lacks arm64 wheels or builds, and check `pysail` and the embedding model runtime first.
+  - **Sail (pysail 0.7.2):** confirmed in D4a. It reads Glue and S3 using Pod Identity credentials with nothing injected by hand.
+  - **boto3 ignores `AWS_REGION`** (it reads only `AWS_DEFAULT_REGION` and `~/.aws/config`). The loader resolves the region through `aws_region()` and passes it explicitly.
+  - **Ingestor:** check `object_store`'s `AmazonS3Builder::from_env` explicitly.
+  - If a component only supports IRSA (web identity), use IRSA for that workload instead.
+- **Architecture: multi-arch (amd64 + arm64)**, built with `docker buildx --platform linux/amd64,linux/arm64`. The built-in Auto Mode `general-purpose` NodePool is **amd64-only** (on-demand c/m/r; the first node was a c6a.large), while the dev laptop is arm64. To run on Graviton, add a custom NodePool that allows `arm64` (`pysail` publishes a `manylinux_2_24_aarch64` wheel). Check the embedding model runtime when E1 picks one.
 - **Acceptance:** each image builds locally, and `docker run` with exported credentials and `.env` values passed as env vars reproduces a manual run: the ingestor against `jetstream-test/`, and the loader with `--once`.
 
 ## WP D2: ECR and CI builds
+
+**Status: ECR done (2026-10-31)**, in the platform project. A multi-arch push is one tagged index plus untagged per-arch children, which ECR won't expire while the index exists, so the count rule selects tagged images only. CI is still open; until then images are pushed by hand.
 
 - **Depends on:** D0, D1.
 - **Platform project:**
@@ -99,12 +106,15 @@ The dev SSO role (`PowerUserAccess`) can't create IAM roles or policies, so `man
 
 ## WP D3: VPC and EKS cluster
 
+**Status: done (2026-10-31).** `infra/platform/`, cluster `bsky` on Kubernetes 1.37 with Auto Mode. The permissions boundary was enough for Auto Mode to launch nodes. Use a kubectl within one minor version of the server (an older client prints a skew warning).
+
 - **Depends on:** D0.
 - **VPC:**
-  - `pulumi_awsx.ec2.Vpc` with 2 AZs, public and private subnets, and **one** NAT gateway (cost over HA, for dev).
+  - 2 AZs, public and private subnets, and **one** NAT gateway (cost over HA, for dev). Built from plain `pulumi_aws` resources rather than `awsx`, so the mock tests can check them and no extra plugin is needed.
   - Add gateway VPC endpoints for S3, which are free and keep lake traffic off the NAT.
   - Consider interface endpoints for SQS, ECR and STS only if NAT data charges become noticeable.
 - **Cluster:**
+  - Cluster and node roles are created through `bsky_iam`. The `pulumi-eks` component isn't used, because it creates its own roles outside the delegated scope.
   - Use **EKS Auto Mode**, which handles node provisioning, the Pod Identity agent and core add-ons, so there are no node groups or Karpenter to run. Auto Mode adds a per-instance management fee.
   - The alternative is a small managed node group plus Karpenter. Record the choice here.
   - Private API endpoint plus a public endpoint restricted to the admin IP ranges, set in stack config.
@@ -116,29 +126,55 @@ The dev SSO role (`PowerUserAccess`) can't create IAM roles or policies, so `man
   - `pulumi up` creates the cluster, `kubectl get nodes` works with the SSO admin role, and a test pod schedules.
   - The Pulumi mock tests check the NAT count, the S3 endpoint and the endpoint access settings.
 
-## WP D4: core workloads (ingestor and loader)
+## WP D4: core workloads
 
-- **Depends on:** D1, D2, D3, and P1.
-- **Data project:**
-  - Turn the loader policy document into a role (via D0's mechanism).
-  - Add an ingestor policy: `s3:PutObject` on `<raw bucket>/<raw prefix>*`, plus `s3:ListBucket` and `s3:GetObject` on the prefix, needed for cursor resume.
-- **Platform project:** Pod Identity associations linking each Kubernetes service account to its role.
-- **Apps project** (`pulumi_kubernetes` provider built from the platform stack's kubeconfig output):
-  - namespace `bsky`, plus one service account per workload;
-  - **ingestor** Deployment:
-    - `replicas: 1`, `strategy: Recreate`;
-    - `terminationGracePeriodSeconds` of 60 or more, above one batch flush plus an S3 PUT;
-    - CPU/memory requests from observed usage;
-    - a liveness check: the ingestor needs an HTTP health endpoint or a heartbeat file. Add one in this WP if P1 didn't;
-  - **loader** Deployment:
-    - `terminationGracePeriodSeconds` above the batch window plus load time (the loader finishes its current batch on SIGTERM);
-    - memory sized for embedded Sail.
-  - Image tags passed in as stack config (the SHA from D2), so a deploy is `pulumi config set` + `pulumi up`, and a rollback is the same with the previous SHA.
+D4 is split so the loader, which recovers easily, is the first workload deployed. SQS redelivers anything it doesn't finish, and the `source_file` check skips files it has already loaded, so mistakes while setting up EKS can't lose or duplicate data. The ingestor follows once P1 makes restarts safe.
+
+**Shared setup, built in D4a and reused by D4b:**
+- **Apps project** (`pulumi_kubernetes` provider built from the platform stack's kubeconfig output): namespace `bsky`, one service account per workload.
+- **Platform project:** Pod Identity associations linking each service account to its role.
+- **Image tags** come from stack config (the SHA from D2). A deploy is `pulumi config set` + `pulumi up`, and a rollback is the same with the previous SHA.
+
+### WP D4a: loader
+
+**Status: done (2026-10-31).** `infra/apps/`. Acceptance results:
+- Sail started and found the Glue table using Pod Identity credentials.
+- Three ingestor runs into `jetstream/` wrote 11 files with 76,580 records. The four Iceberg snapshots they produced add exactly 76,580 records, and SQS drained.
+- Deleting the pod while it held received messages: SIGTERM made it finish the batch and commit (21s after the delete, well inside the 120s grace period). The replacement pod found nothing left to do. A hard kill (SIGKILL or node loss) relies on the visibility timeout plus the `source_file` check and hasn't been exercised.
+
+- **Depends on:** D1 (loader image), D2 (ECR; a manual `docker push` is enough here, CI can follow), D3.
+- **Data project:** a role for the loader via `bsky_iam.role`, trusted by `pods.eks.amazonaws.com` (`sts:AssumeRole` + `sts:TagSession`), with the existing `bsky-iceberg-loader` policy attached. Export its ARN.
+- **Loader Deployment:**
+  - `replicas: 1`;
+  - `terminationGracePeriodSeconds` above the batch window plus load time (the loader finishes its current batch on SIGTERM);
+  - memory sized for embedded Sail;
+  - env: queue URL from the data stack, warehouse bucket and region from config.
+- **Acceptance:**
+  - Logs show the embedded Sail server starting and the Glue table being found, using Pod Identity credentials with nothing injected by hand.
+  - Files uploaded under the raw prefix are committed to `glue.bsky_raw.jetstream`, and SQS drains.
+  - Deleting the pod mid-batch loses nothing: the messages reappear after the visibility timeout and are loaded once.
+
+### WP D4b: ingestor
+
+**Status: done (2026-11-02).** `Dockerfile` at the repo root (distroless/cc, with an allowlist `.dockerignore`), role `bsky-ingestor`, and Deployment `ingestor`. Results:
+- `object_store` picks up Pod Identity credentials.
+- At the cut-over from the laptop ingestor, the first EKS file overlapped the last local one by 4.95 s.
+- Deleting the pod: SIGTERM flushes the partial batch, and the new pod resumes from it.
+- **Liveness:** no probe. The read idle timeout reconnects a silent connection, and write failures exit the process (fail-fast), which Kubernetes restarts. A probe couldn't detect a stalled stream any better.
+- **Testing a hard kill in the cluster isn't practical:** `kubectl delete --force` still sends SIGTERM, and PID 1 ignores SIGKILL sent from inside its own PID namespace (e.g. from an ephemeral debug container). The hard kill was tested locally instead (P1).
+- **Batch size:** 100k messages and a 300 s flush interval, giving ~16 MB files about every 3.5 min instead of 1.5 MB every 20 s. Both are set in apps stack config (`ingestBatchSize`, `ingestFlushInterval`).
+
+- **Depends on:** D4a, P1, and the ingestor image from D1.
+- **Data project:** an ingestor role and policy: `s3:PutObject` on `<raw bucket>/<raw prefix>*`, plus `s3:ListBucket` and `s3:GetObject` on the prefix (needed for cursor resume).
+- **Ingestor Deployment:**
+  - `replicas: 1`, `strategy: Recreate`;
+  - `terminationGracePeriodSeconds` of 60 or more, above one batch flush plus an S3 PUT;
+  - CPU/memory requests from observed usage;
+  - a liveness check: the ingestor needs an HTTP health endpoint or a heartbeat file. Add one in this WP if P1 didn't.
 - **Cut-over:** stop any manually run ingestor first. Two ingestors would duplicate data; dedup handles it, but it's wasteful.
 - **Acceptance:**
-  - New files appear under the raw prefix, the loader commits them, and SQS drains.
+  - New files appear under the raw prefix, and the deployed loader commits them.
   - Deleting the ingestor pod produces overlap, not a gap: the cursor is resumed and visible in the logs.
-  - Draining the loader's node finishes or releases its batch without losing messages.
 
 ## WP D5: pipeline jobs and maintenance
 
@@ -159,10 +195,15 @@ The dev SSO role (`PowerUserAccess`) can't create IAM roles or policies, so `man
   - Classify gets its budget flags (`--max-input-tokens`, `--sample-rate`) from stack config, so spend is controlled in one place.
   - Embed gets a GPU node selector and toleration if needed.
   - The search API (E3) as a Deployment with a ClusterIP Service. External exposure is out of scope.
-- **Table maintenance CronJob (nightly):**
-  - for each Iceberg table, run Athena `OPTIMIZE <table> REWRITE DATA USING BIN_PACK` (scoped to recent partitions) and `VACUUM <table>`, which expires old snapshots and removes orphan files;
+- **File sizes (measured 2026-11-02):** the loader writes one Iceberg data file per raw file. By then the bronze table had 2,101 files of ~1.5 MB for 20.8M records, plus a snapshot per commit. Fixes, in order:
+  1. Larger raw files: done in D4b (~16 MB).
+  2. **Loader:** repartition by the `day`/`hour` partition columns before the append, so a commit writes one file per hour partition rather than one per input file. This matters most for backlogs and replays, where a commit takes 100 files.
+  3. **Compaction:** on closed hour partitions, hourly. An hour of the firehose is about 270 MB, close to the ideal file size, so one file per hour is the target.
+- **Table maintenance (hourly compaction, nightly vacuum):**
+  - for each Iceberg table, run Athena `OPTIMIZE <table> REWRITE DATA USING BIN_PACK WHERE day = … AND hour = …` on the previous hour, and nightly `VACUUM <table>`, which expires old snapshots and removes orphan files;
+  - EventBridge Scheduler can call Athena's `StartQueryExecution` directly, so no CronJob or compute is needed. Use a CronJob only if the job needs logic (e.g. picking partitions);
   - set the snapshot retention properties on each table at creation.
-  - The ingestor writes ~3,000 small files a day, so this matters within weeks.
+  - **Raw bucket:** don't compact it. After loading, raw files only serve replays, so add a lifecycle rule that expires `jetstream/` objects after 7–14 days (data stack).
   - **Decide:** if Sail gains Iceberg's `rewrite_data_files` and `expire_snapshots` procedures, compare it with Athena; otherwise Athena it is. Confirm Athena can OPTIMIZE tables written by Sail (format version and properties).
 - **KEDA (optional):** install it as a Helm release from the apps project, with a `ScaledObject` scaling the loader on SQS `ApproximateNumberOfMessages`. Useful for backfills; skip it until a backfill needs it.
 - **Acceptance:** each CronJob runs on schedule and processes its watermark range. Maintenance reduces the file count in a day partition, and VACUUM removes expired snapshot files.

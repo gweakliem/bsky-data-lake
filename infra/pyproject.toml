@@ -15,4 +15,6 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
+# platform/ and apps/ are separate Pulumi projects with their own environments.
+testpaths = ["test_infra.py"]
 filterwarnings = ["ignore::DeprecationWarning:pulumi_aws.*"]

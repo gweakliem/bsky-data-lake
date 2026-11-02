@@ -1,0 +1,6 @@
+name: bsky-platform
+description: Shared platform for the Bluesky data lake's workloads (VPC, EKS Auto Mode, ECR)
+runtime:
+  name: python
+  options:
+    toolchain: uv

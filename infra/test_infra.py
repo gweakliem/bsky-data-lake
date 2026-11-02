@@ -162,3 +162,35 @@ def test_every_iam_resource_in_delegated_scope():
     for r in roles:
         assert r.get("path") == "/bsky/", r
         assert r.get("permissionsBoundary") == "arn:aws:iam::123456789012:policy/bsky-workload-boundary", r
+
+
+@pulumi.runtime.test
+def test_loader_role_for_pod_identity():
+    def check(args):
+        trust, arn = args
+        (stmt,) = json.loads(trust)["Statement"]
+        assert stmt["Principal"] == {"Service": "pods.eks.amazonaws.com"}
+        assert stmt["Action"] == ["sts:AssumeRole", "sts:TagSession"]
+        assert arn == "arn:aws:iam::123456789012:role/bsky/bsky-iceberg-loader"
+
+    return pulumi.Output.all(infra.loader_role.assume_role_policy, infra.loader_role.arn).apply(check)
+
+
+def test_ingestor_policy_scopes():
+    stmts = {s["Sid"]: s for s in json.loads(infra.ingestor_policy_document)["Statement"]}
+    assert stmts["ReadWriteRawFiles"]["Resource"] == "arn:aws:s3:::test-bucket/jetstream/*"
+    assert sorted(stmts["ReadWriteRawFiles"]["Action"]) == ["s3:GetObject", "s3:PutObject"]
+    # Listing (for resume) only within the raw prefix, and nothing can delete.
+    assert stmts["ListRawPrefix"]["Condition"] == {"StringLike": {"s3:prefix": ["jetstream/*"]}}
+    assert not any("Delete" in a for s in stmts.values() for a in s["Action"] if isinstance(s["Action"], list))
+
+
+@pulumi.runtime.test
+def test_ingestor_role_for_pod_identity():
+    def check(args):
+        trust, arn = args
+        (stmt,) = json.loads(trust)["Statement"]
+        assert stmt["Principal"] == {"Service": "pods.eks.amazonaws.com"}
+        assert arn == "arn:aws:iam::123456789012:role/bsky/bsky-ingestor"
+
+    return pulumi.Output.all(infra.ingestor_role.assume_role_policy, infra.ingestor_role.arn).apply(check)

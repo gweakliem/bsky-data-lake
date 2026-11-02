@@ -52,6 +52,11 @@ These apply to every silver and support table.
 
 ## WP P1: ingestor cursor resume
 
+**Status: done (2026-11-02).** `ParquetWriter::latest_time_us` reads the newest file's footer statistics. Flags: `--resume-margin` (5 s) and `--no-resume`. Results:
+- A restart against `jetstream-test/` overlapped by exactly 5.0 s, with no gap.
+- A `kill -9` with nothing written yet replayed everything from the last persisted file, at about 30k messages/s.
+- Reconnects already used the in-memory cursor. A read idle timeout (`--idle-timeout`, 60 s) now also reconnects a connection that goes silent without erroring.
+
 Prerequisite for unattended running and for D4.
 
 - **Goal:** after a restart, the ingestor resumes from just before the last event it persisted, instead of from live.

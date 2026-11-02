@@ -14,11 +14,12 @@ Work plans for the next phases of the data lake. Each plan is split into work pa
 P1 ──► S1 ──► S2 ──► S3
                       └──────────────► E1 ──► E2 ──► E3          (embeddings/search)
 
-P1 ──► D1 ──┐
-D0 ─────────┼──► D2 ──┐
-D0 ──► D3 ──┴─────────┴──► D4 ──► D5 ──► D6                     (deployment)
+D1 (loader image) ──┐
+D0 ──► D2 ──────────┼──► D4a (loader) ──► D4b (ingestor) ──► D5 ──► D6     (deployment)
+D0 ──► D3 ──────────┘                          ▲
+                                     P1 + ingestor image
 
-D0 (IAM access) blocks D2/D3. P1 (cursor resume) gates the ingestor image.
+Done: D0 (IAM access), D3 (cluster), P1 (cursor resume), D4a (loader on EKS) and D4b (ingestor on EKS). D1 and D2 are done apart from CI.
 D5 adds each pipeline job (S2, C2, E2, E3) as it lands.
 ```
 

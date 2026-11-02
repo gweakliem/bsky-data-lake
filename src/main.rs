@@ -49,9 +49,24 @@ struct Args {
     #[arg(long = "collection")]
     collections: Vec<String>,
 
-    /// Start from this Jetstream cursor (unix microseconds) instead of live.
+    /// Start from this Jetstream cursor (unix microseconds). Without it, the
+    /// ingestor resumes from the newest file already in the output.
     #[arg(long)]
     cursor: Option<i64>,
+
+    /// Seconds to rewind past the newest `time_us` already written when
+    /// resuming, so a restart overlaps rather than leaves a gap.
+    #[arg(long, env = "BSKY_RESUME_MARGIN", default_value_t = 5)]
+    resume_margin: u64,
+
+    /// Reconnect when the connection delivers nothing for this many seconds.
+    /// Raise it when filtering to a quiet collection.
+    #[arg(long, env = "BSKY_IDLE_TIMEOUT", default_value_t = 60)]
+    idle_timeout: u64,
+
+    /// Start live instead of resuming from the existing output.
+    #[arg(long, conflicts_with = "cursor")]
+    no_resume: bool,
 
     /// Parquet compression codec.
     #[arg(long, value_enum, default_value_t = Codec::Zstd)]
@@ -80,9 +95,15 @@ async fn main() -> Result<()> {
     let output = resolve_output(args.output, args.bucket, &args.prefix)?;
     anyhow::ensure!(args.batch_size > 0, "--batch-size must be greater than 0");
     anyhow::ensure!(args.flush_interval > 0, "--flush-interval must be greater than 0");
+    anyhow::ensure!(args.idle_timeout > 0, "--idle-timeout must be greater than 0");
 
     let writer = ParquetWriter::from_location(&output, args.compression)?;
     info!(%output, "writing parquet");
+    let cursor = match args.cursor {
+        Some(cursor) => Some(cursor),
+        None if args.no_resume => None,
+        None => resume_cursor(writer.latest_time_us().await?, args.resume_margin),
+    };
     let (tx, rx) = mpsc::channel(args.batch_size.max(1024));
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
@@ -95,7 +116,8 @@ async fn main() -> Result<()> {
     let ingest_task = tokio::spawn(ingest::run_ingest(
         args.url,
         args.collections,
-        args.cursor,
+        cursor,
+        Duration::from_secs(args.idle_timeout),
         tx,
         shutdown_rx,
     ));
@@ -132,6 +154,17 @@ fn resolve_output(output: Option<String>, bucket: Option<String>, prefix: &str) 
     })
 }
 
+/// The cursor to resume from, given the newest `time_us` already written.
+fn resume_cursor(latest: Option<i64>, margin_secs: u64) -> Option<i64> {
+    let Some(latest) = latest else {
+        info!("no existing output to resume from; starting live");
+        return None;
+    };
+    let cursor = latest.saturating_sub(margin_secs as i64 * 1_000_000);
+    info!(latest, cursor, "resuming from existing output");
+    Some(cursor)
+}
+
 async fn wait_for_signal() {
     #[cfg(unix)]
     {
@@ -161,6 +194,12 @@ mod tests {
         assert_eq!(resolve_output(None, Some("b".into()), "raw/js").unwrap(), "s3://b/raw/js");
         assert_eq!(resolve_output(None, Some("s3://b/".into()), "/p/").unwrap(), "s3://b/p");
         assert_eq!(resolve_output(None, Some("b".into()), "").unwrap(), "s3://b");
+    }
+
+    #[test]
+    fn resume_cursor_rewinds_by_margin() {
+        assert_eq!(resume_cursor(Some(10_000_000), 5), Some(5_000_000));
+        assert_eq!(resume_cursor(None, 5), None);
     }
 
     #[test]

@@ -13,6 +13,8 @@ use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::{Compression, ZstdLevel};
 use parquet::file::properties::WriterProperties;
+use parquet::file::reader::{FileReader, SerializedFileReader};
+use parquet::file::statistics::Statistics;
 use url::Url;
 
 /// A single message received from Jetstream.
@@ -131,6 +133,51 @@ impl ParquetWriter {
         Ok(locations)
     }
 
+    /// The highest `time_us` already written under the prefix, if any.
+    ///
+    /// Partition and file names sort chronologically, so this walks dates and
+    /// hours newest first and reads only the footer statistics of the newest
+    /// file, stepping back a file at a time past any that hold no `time_us`.
+    pub async fn latest_time_us(&self) -> Result<Option<i64>> {
+        for date in self.child_prefixes(&self.prefix, "date=").await? {
+            for hour in self.child_prefixes(&date, "hour=").await? {
+                let mut files: Vec<Path> = self
+                    .store
+                    .list_with_delimiter(Some(&hour))
+                    .await?
+                    .objects
+                    .into_iter()
+                    .map(|o| o.location)
+                    // Skips the local store's staging files, which are still being written.
+                    .filter(|p| p.filename().is_some_and(|f| f.ends_with(".parquet")))
+                    .collect();
+                files.sort_unstable_by(|a, b| b.cmp(a));
+                for file in files {
+                    let bytes = self.store.get(&file).await?.bytes().await?;
+                    let max = max_time_us(bytes).with_context(|| format!("reading footer of {file}"))?;
+                    if max.is_some() {
+                        return Ok(max);
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// Partition directories directly under `parent` named `<key>...`, newest first.
+    async fn child_prefixes(&self, parent: &Path, key: &str) -> Result<Vec<Path>> {
+        let mut children: Vec<Path> = self
+            .store
+            .list_with_delimiter(Some(parent))
+            .await?
+            .common_prefixes
+            .into_iter()
+            .filter(|p| p.filename().is_some_and(|f| f.starts_with(key)))
+            .collect();
+        children.sort_unstable_by(|a, b| b.cmp(a));
+        Ok(children)
+    }
+
     /// Write `records`, which must all share an hour partition, to one object.
     async fn write_object(&self, records: Vec<Record>) -> Result<String> {
         let first = records[0].received_at;
@@ -166,6 +213,24 @@ impl ParquetWriter {
 fn hour_partition(record: &Record) -> (chrono::NaiveDate, u32) {
     use chrono::Timelike;
     (record.received_at.date_naive(), record.received_at.hour())
+}
+
+/// The max `time_us` across a Parquet file's row groups, from footer statistics.
+fn max_time_us(bytes: Bytes) -> Result<Option<i64>> {
+    let reader = SerializedFileReader::new(bytes)?;
+    let metadata = reader.metadata();
+    let Some(column) = metadata.file_metadata().schema_descr().columns().iter().position(|c| c.name() == "time_us")
+    else {
+        anyhow::bail!("no time_us column");
+    };
+    Ok(metadata
+        .row_groups()
+        .iter()
+        .filter_map(|rg| match rg.column(column).statistics() {
+            Some(Statistics::Int64(stats)) => stats.max_opt().copied(),
+            _ => None,
+        })
+        .max())
 }
 
 fn encode(schema: SchemaRef, props: WriterProperties, records: &[Record]) -> Result<Bytes> {
@@ -316,6 +381,51 @@ mod tests {
         let date_dir = hour_dir.parent().unwrap();
         assert!(hour_dir.file_name().unwrap().to_str().unwrap().starts_with("hour="));
         assert!(date_dir.file_name().unwrap().to_str().unwrap().starts_with("date="));
+    }
+
+    fn at(ts: &str, time_us: Option<i64>) -> Record {
+        Record {
+            received_at: DateTime::parse_from_rfc3339(ts).unwrap().into(),
+            time_us,
+            payload: "{}".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn latest_time_us_reads_newest_file_across_hours() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = ParquetWriter::from_location(dir.path().to_str().unwrap(), Codec::Zstd).unwrap();
+        // Written out of order, across days and hours; time_us isn't sorted within a file.
+        for batch in [
+            vec![at("2026-10-31T23:10:00Z", Some(300)), at("2026-10-31T23:20:00Z", Some(310))],
+            vec![at("2026-10-31T09:00:00Z", Some(900))],
+            vec![at("2026-11-01T01:05:00Z", Some(520)), at("2026-11-01T01:05:01Z", Some(510))],
+            vec![at("2026-11-01T00:30:00Z", Some(400))],
+            vec![at("2026-11-01T01:00:00Z", Some(500))],
+        ] {
+            writer.write_batch(batch).await.unwrap();
+        }
+        // A file still being written by the local store, which must be ignored.
+        let hour = dir.path().join("date=2026-11-01/hour=01");
+        std::fs::write(hour.join("jetstream-20261101T015959.000000Z-ffffffff.parquet#1"), b"partial").unwrap();
+
+        assert_eq!(writer.latest_time_us().await.unwrap(), Some(520));
+    }
+
+    #[tokio::test]
+    async fn latest_time_us_steps_back_past_files_without_time_us() {
+        let (_, writer) = memory_writer("p");
+        writer.write_batch(vec![at("2026-11-01T01:00:00Z", Some(42))]).await.unwrap();
+        writer.write_batch(vec![at("2026-11-01T02:00:00Z", None)]).await.unwrap();
+        assert_eq!(writer.latest_time_us().await.unwrap(), Some(42));
+    }
+
+    #[tokio::test]
+    async fn latest_time_us_of_empty_output_is_none() {
+        let (store, writer) = memory_writer("p");
+        // Objects outside the date= layout don't count.
+        store.put(&Path::from("p/other.parquet"), PutPayload::from_static(b"x")).await.unwrap();
+        assert_eq!(writer.latest_time_us().await.unwrap(), None);
     }
 
     #[test]

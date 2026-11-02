@@ -1,0 +1,5 @@
+# Allowlist: the context is the repo root, which holds .env and data/.
+*
+!Cargo.toml
+!Cargo.lock
+!src/

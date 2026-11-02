@@ -39,10 +39,14 @@ pub fn subscribe_url(base: &str, collections: &[String], cursor: Option<i64>) ->
 
 /// Read from Jetstream until `shutdown` fires, reconnecting on failure and
 /// resuming from the last seen `time_us`. Records are sent to `tx`.
+///
+/// A connection that delivers nothing for `idle_timeout` is treated as dead:
+/// a half-open TCP connection otherwise stalls ingest without any error.
 pub async fn run_ingest(
     base_url: String,
     collections: Vec<String>,
     mut cursor: Option<i64>,
+    idle_timeout: Duration,
     tx: mpsc::Sender<Record>,
     mut shutdown: watch::Receiver<bool>,
 ) {
@@ -73,7 +77,13 @@ pub async fn run_ingest(
 
         loop {
             let msg = tokio::select! {
-                msg = ws.next() => msg,
+                msg = tokio::time::timeout(idle_timeout, ws.next()) => match msg {
+                    Ok(msg) => msg,
+                    Err(_) => {
+                        warn!(?idle_timeout, "no messages received; reconnecting");
+                        break;
+                    }
+                },
                 _ = shutdown.changed() => {
                     let _ = ws.close(None).await;
                     return;

@@ -65,8 +65,8 @@ loader = k8s.apps.v1.Deployment(
             metadata=k8s.meta.v1.ObjectMetaArgs(labels=loader_labels),
             spec=k8s.core.v1.PodSpecArgs(
                 service_account_name=loader_sa.metadata.name,
-                # On SIGTERM the loader finishes its current batch: up to the
-                # 30 s batch window plus the load itself.
+                # On SIGTERM the loader finishes its current commit (~35 s for
+                # 128 MB) and releases the rest of the batch to the queue.
                 termination_grace_period_seconds=120,
                 security_context=pod_security,
                 containers=[

@@ -99,6 +99,7 @@ def test_loader_policy_scopes():
     def check(policy):
         stmts = {s["Sid"]: s for s in json.loads(policy)["Statement"]}
         assert stmts["ReadRawFiles"]["Resource"] == "arn:aws:s3:::test-bucket/jetstream/*"
+        assert "sqs:ChangeMessageVisibility" in stmts["ConsumeQueue"]["Action"]
         assert stmts["WriteIcebergTables"]["Resource"] == "arn:aws:s3:::test-warehouse/iceberg/*"
         assert stmts["ListBuckets"]["Resource"] == ["arn:aws:s3:::test-bucket", "arn:aws:s3:::test-warehouse"]
         assert "glue:CreateDatabase" not in stmts["GlueCatalog"]["Action"]

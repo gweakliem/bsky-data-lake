@@ -1,4 +1,5 @@
 import json
+import threading
 from pathlib import Path
 
 import pytest
@@ -12,10 +13,16 @@ class FakeSQS:
     def __init__(self, messages):
         self.pending = list(messages)
         self.deleted = []
+        self.released = []
 
     def receive_message(self, QueueUrl, MaxNumberOfMessages, WaitTimeSeconds):
         batch, self.pending = self.pending[:MaxNumberOfMessages], self.pending[MaxNumberOfMessages:]
         return {"Messages": batch} if batch else {}
+
+    def change_message_visibility_batch(self, QueueUrl, Entries):
+        assert len(Entries) <= 10 and all(e["VisibilityTimeout"] == 0 for e in Entries)
+        self.released.extend(e["ReceiptHandle"] for e in Entries)
+        return {"Successful": [{"Id": e["Id"]} for e in Entries], "Failed": []}
 
     def delete_message_batch(self, QueueUrl, Entries):
         assert len(Entries) <= 10
@@ -166,7 +173,7 @@ def test_large_batches_load_in_byte_capped_commits(loader, bucket_dir):
     assert len(sqs.deleted) == 5
 
 
-def test_failed_chunk_keeps_messages_and_retry_skips_committed(loader, bucket_dir):
+def test_failed_chunk_keeps_only_its_messages(loader, bucket_dir):
     keys, uris = sized_files(bucket_dir, 4)
     msgs = [message(i, k, size=60) for i, k in enumerate(keys)]
     consumer = make_consumer(FakeSQS([]), loader, bucket_dir, max_load_bytes=120)
@@ -181,11 +188,40 @@ def test_failed_chunk_keeps_messages_and_retry_skips_committed(loader, bucket_di
 
     loader.load = flaky
     assert consumer.process(msgs) is False
-    assert consumer.sqs.deleted == []
+    # The first chunk committed, so its messages are gone; the second's stay.
+    assert consumer.sqs.deleted == ["r0", "r1"]
     assert table_files(loader) == sorted(uris[:2])
 
-    # Redelivery: the first chunk's files are skipped, the rest load once.
+    # Redelivery of what's left loads it once.
+    assert consumer.process(msgs[2:]) is True
+    assert table_files(loader) == sorted(uris)
+    assert consumer.sqs.deleted == ["r0", "r1", "r2", "r3"]
+
+
+def test_stop_releases_messages_after_the_current_chunk(loader, bucket_dir):
+    keys, uris = sized_files(bucket_dir, 4)
+    msgs = [message(i, k, size=60) for i, k in enumerate(keys)]
+    sqs = FakeSQS([])
+    consumer = make_consumer(sqs, loader, bucket_dir, max_load_bytes=60)
+    stop = threading.Event()
+    load = loader.load
+    # The signal arrives during the first commit.
+    loader.load = lambda u: stop.set() or load(u)
+
+    assert consumer.process(msgs, stop) is True
+    assert table_files(loader) == [uris[0]]
+    assert sqs.deleted == ["r0"]
+    assert sqs.released == ["r1", "r2", "r3"]
+
+
+def test_message_files_stay_in_one_chunk(loader, bucket_dir):
+    keys, uris = sized_files(bucket_dir, 3)
+    # One message with two files over the cap, then a small one.
+    msgs = [message(0, keys[0], keys[1], size=100), message(1, keys[2], size=10)]
+    consumer = make_consumer(FakeSQS([]), loader, bucket_dir, max_load_bytes=150)
+    commits = []
+    load = loader.load
+    loader.load = lambda u: commits.append(len(u)) or load(u)
+
     assert consumer.process(msgs) is True
-    rows = loader.spark.table(loader.table).select("source_file").collect()
-    assert sorted(r.source_file for r in rows) == sorted(uris)
-    assert len(consumer.sqs.deleted) == 4
+    assert commits == [2, 1]

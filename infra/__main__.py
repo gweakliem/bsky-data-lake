@@ -115,7 +115,13 @@ loader_policy_document = pulumi.Output.all(queue.arn, account_id, region).apply(
                 {
                     "Sid": "ConsumeQueue",
                     "Effect": "Allow",
-                    "Action": ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"],
+                    # ChangeMessageVisibility releases unprocessed messages on shutdown.
+                    "Action": [
+                        "sqs:ReceiveMessage",
+                        "sqs:DeleteMessage",
+                        "sqs:ChangeMessageVisibility",
+                        "sqs:GetQueueAttributes",
+                    ],
                     "Resource": args[0],
                 },
                 {

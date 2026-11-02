@@ -25,10 +25,9 @@ class QueueConsumer:
     its max receive count). Redelivered files that were already committed are
     skipped by the loader.
 
-    A batch's files are loaded in commits of at most `max_load_bytes` (by the
+    A batch is loaded in commits of at most `max_load_bytes` of files (by the
     sizes in the notifications), because Sail's write path holds several
-    times the input in memory. A file larger than the cap gets a commit of
-    its own.
+    times the input in memory.
     """
 
     def __init__(
@@ -63,7 +62,7 @@ class QueueConsumer:
         while not stop.is_set():
             messages = self.receive_batch(stop)
             if messages:
-                self.process(messages)
+                self.process(messages, stop)
 
     def receive_batch(self, stop: threading.Event | None = None) -> list[dict]:
         """Collect up to `max_messages`, waiting at most `batch_window` seconds
@@ -97,10 +96,15 @@ class QueueConsumer:
                 break
         return messages
 
-    def process(self, messages: list[dict]) -> bool:
-        """Load the files referenced by `messages`; returns True on success."""
-        done: list[dict] = []
-        objects: dict[S3Object, None] = {}  # ordered set
+    def process(self, messages: list[dict], stop: threading.Event | None = None) -> bool:
+        """Load the files referenced by `messages`; returns False if a load failed.
+
+        Messages are grouped into commits of at most `max_load_bytes`, and
+        each commit's messages are deleted as soon as it succeeds. If `stop`
+        is set between commits, the rest are released back to the queue, so a
+        shutdown waits for at most one commit.
+        """
+        pending: list[tuple[dict, list[S3Object]]] = []
         for msg in messages:
             try:
                 parsed = parse_message(msg["Body"])
@@ -108,51 +112,82 @@ class QueueConsumer:
                 # Left on the queue so it ends up in the dead-letter queue.
                 log.error("unparseable message %s: %s", msg.get("MessageId"), e)
                 continue
-            done.append(msg)
-            for obj in parsed:
-                if obj.key.startswith(self.source_prefix) and obj.key.endswith(self.suffix):
-                    objects[obj] = None
-                else:
-                    log.debug("ignoring %s", obj.uri)
+            pending.append((msg, [obj for obj in parsed if self._wanted(obj)]))
 
-        present = []
-        for obj in objects:
-            if self.object_exists(obj):
-                present.append(obj)
-            else:
-                log.warning("skipping %s: object no longer exists", obj.uri)
-
-        # Each chunk is its own commit. If a later one fails, the messages stay
-        # on the queue, and on redelivery the committed files are skipped.
-        for chunk in self._chunks(present):
-            uris = [self.uri_for(obj) for obj in chunk]
-            started = time.monotonic()
-            try:
-                loaded = self.loader.load(uris)
-            except Exception:
-                log.exception("failed to load %d file(s); will retry after visibility timeout", len(uris))
+        chunks = self._chunks(pending)
+        for i, chunk in enumerate(chunks):
+            if i and stop is not None and stop.is_set():
+                rest = [msg for later in chunks[i:] for msg, _ in later]
+                log.info("stopping; releasing %d message(s) back to the queue", len(rest))
+                self._release(rest)
+                return True
+            if not self._load(chunk):
                 return False
-            log.info(
-                "appended %d file(s), %.0f MB, to %s in %.1f s (%d already loaded)",
-                len(loaded),
-                sum(obj.size for obj in chunk) / 1e6,
-                self.loader.table,
-                time.monotonic() - started,
-                len(uris) - len(loaded),
-            )
-        self._delete(done)
+            self._delete([msg for msg, _ in chunk])
         return True
 
-    def _chunks(self, objects: list[S3Object]) -> list[list[S3Object]]:
-        chunks: list[list[S3Object]] = []
+    def _wanted(self, obj: S3Object) -> bool:
+        if not (obj.key.startswith(self.source_prefix) and obj.key.endswith(self.suffix)):
+            log.debug("ignoring %s", obj.uri)
+            return False
+        if not self.object_exists(obj):
+            log.warning("skipping %s: object no longer exists", obj.uri)
+            return False
+        return True
+
+    def _load(self, chunk: list[tuple[dict, list[S3Object]]]) -> bool:
+        """Commit one chunk's files. On failure its messages stay on the queue
+        and are retried after the visibility timeout."""
+        objects = list(dict.fromkeys(obj for _, objs in chunk for obj in objs))
+        if not objects:
+            return True
+        uris = [self.uri_for(obj) for obj in objects]
+        started = time.monotonic()
+        try:
+            loaded = self.loader.load(uris)
+        except Exception:
+            log.exception("failed to load %d file(s); will retry after visibility timeout", len(uris))
+            return False
+        log.info(
+            "appended %d file(s), %.0f MB, to %s in %.1f s (%d already loaded)",
+            len(loaded),
+            sum(obj.size for obj in objects) / 1e6,
+            self.loader.table,
+            time.monotonic() - started,
+            len(uris) - len(loaded),
+        )
+        return True
+
+    def _chunks(
+        self, pending: list[tuple[dict, list[S3Object]]]
+    ) -> list[list[tuple[dict, list[S3Object]]]]:
+        # A message's files stay in one chunk. One larger than the cap gets a
+        # chunk of its own.
+        chunks: list[list[tuple[dict, list[S3Object]]]] = []
         size = 0
-        for obj in objects:
-            if not chunks or size + obj.size > self.max_load_bytes:
+        for msg, objects in pending:
+            msg_size = sum(obj.size for obj in objects)
+            if not chunks or size + msg_size > self.max_load_bytes:
                 chunks.append([])
                 size = 0
-            chunks[-1].append(obj)
-            size += obj.size
+            chunks[-1].append((msg, objects))
+            size += msg_size
         return chunks
+
+    def _release(self, messages: list[dict]) -> None:
+        """Make messages visible again now, rather than after the visibility timeout."""
+        for i in range(0, len(messages), SQS_MAX_BATCH):
+            chunk = messages[i : i + SQS_MAX_BATCH]
+            resp = self.sqs.change_message_visibility_batch(
+                QueueUrl=self.queue_url,
+                Entries=[
+                    {"Id": str(n), "ReceiptHandle": m["ReceiptHandle"], "VisibilityTimeout": 0}
+                    for n, m in enumerate(chunk)
+                ],
+            )
+            for failure in resp.get("Failed", []):
+                # Harmless: it reappears once the visibility timeout expires.
+                log.warning("failed to release message: %s", failure)
 
     def _delete(self, messages: list[dict]) -> None:
         for i in range(0, len(messages), SQS_MAX_BATCH):

@@ -16,6 +16,12 @@ log = logging.getLogger(__name__)
 SQS_MAX_BATCH = 10
 
 
+def is_commit_conflict(e: Exception) -> bool:
+    """Whether a load failed because another writer committed first."""
+    # Sail reports it as e.g. "conflict: Cannot commit catalog-managed table ..."
+    return "conflict:" in str(e) or "CommitFailedException" in str(e)
+
+
 class QueueConsumer:
     """Long-polls an SQS queue and appends newly created files to the table.
 
@@ -44,6 +50,8 @@ class QueueConsumer:
         max_load_bytes: int = 128 * 2**20,
         batch_window: float = 30.0,
         wait_time: int = 20,
+        conflict_retry_delays: tuple[float, ...] = (5, 15, 45),
+        sleep: Callable[[float], None] = time.sleep,
     ):
         self.sqs = sqs
         self.queue_url = queue_url
@@ -56,6 +64,10 @@ class QueueConsumer:
         self.max_load_bytes = max_load_bytes
         self.batch_window = batch_window
         self.wait_time = wait_time
+        # Sail can't refresh a table, so a retry waits for its catalog cache
+        # to pick up the other writer's commit.
+        self.conflict_retry_delays = conflict_retry_delays
+        self.sleep = sleep
 
     def run(self, stop: threading.Event) -> None:
         """Process batches until `stop` is set."""
@@ -143,11 +155,19 @@ class QueueConsumer:
             return True
         uris = [self.uri_for(obj) for obj in objects]
         started = time.monotonic()
-        try:
-            loaded = self.loader.load(uris)
-        except Exception:
-            log.exception("failed to load %d file(s); will retry after visibility timeout", len(uris))
-            return False
+        for attempt, delay in enumerate([*self.conflict_retry_delays, None], start=1):
+            try:
+                loaded = self.loader.load(uris)
+                break
+            except Exception as e:
+                # Another writer (Glue's compactor) committed first. Retrying
+                # is safe: the load skips files that are already in.
+                if delay is not None and is_commit_conflict(e):
+                    log.warning("commit conflict on attempt %d; retrying in %g s", attempt, delay)
+                    self.sleep(delay)
+                    continue
+                log.exception("failed to load %d file(s); will retry after visibility timeout", len(uris))
+                return False
         log.info(
             "appended %d file(s), %.0f MB, to %s in %.1f s (%d already loaded)",
             len(loaded),

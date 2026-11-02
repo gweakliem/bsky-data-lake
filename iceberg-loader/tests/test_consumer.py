@@ -225,3 +225,39 @@ def test_message_files_stay_in_one_chunk(loader, bucket_dir):
 
     assert consumer.process(msgs) is True
     assert commits == [2, 1]
+
+
+def test_commit_conflicts_are_retried_with_backoff(loader, bucket_dir):
+    keys, uris = sized_files(bucket_dir, 1)
+    sqs = FakeSQS([message(0, keys[0])])
+    sleeps = []
+    consumer = make_consumer(sqs, loader, bucket_dir, sleep=sleeps.append)
+    load = loader.load
+    attempts = []
+
+    def conflicting(u):
+        attempts.append(u)
+        if len(attempts) < 3:
+            raise RuntimeError("conflict: Cannot commit catalog-managed table 't' because base metadata location ...")
+        return load(u)
+
+    loader.load = conflicting
+    assert consumer.process(consumer.receive_batch()) is True
+    assert sleeps == [5, 15]
+    assert table_files(loader) == uris
+    assert sqs.deleted == ["r0"]
+
+
+def test_conflict_retries_run_out_and_other_errors_are_not_retried(loader, bucket_dir):
+    keys, _ = sized_files(bucket_dir, 1)
+    sleeps = []
+    consumer = make_consumer(FakeSQS([]), loader, bucket_dir, sleep=sleeps.append)
+    loader.load = lambda u: (_ for _ in ()).throw(RuntimeError("conflict: still stale"))
+    assert consumer.process([message(0, keys[0])]) is False
+    assert sleeps == [5, 15, 45]
+
+    sleeps.clear()
+    loader.load = lambda u: (_ for _ in ()).throw(RuntimeError("access denied"))
+    assert consumer.process([message(1, keys[0])]) is False
+    assert sleeps == []
+    assert consumer.sqs.deleted == []

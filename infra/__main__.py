@@ -33,6 +33,13 @@ manage_iam = config.get_bool("manageIam", True)
 # Iceberg tables in the raw database that Glue's table optimizers maintain.
 # The loader creates the tables, so add one here only once it exists.
 optimized_tables = config.get_object("optimizedTables") or ["jetstream"]
+# Raw files are a replay source once loaded, so they expire.
+raw_retention_days = config.get_int("rawRetentionDays") or 7
+# Where alarms and budget alerts go. Kept out of committed config: it's personal.
+alert_email = config.get("alertEmail") or os.environ.get("BSKY_ALERT_EMAIL")
+if not alert_email:
+    raise ValueError("set BSKY_ALERT_EMAIL in .env or `pulumi config set alertEmail <address>`")
+budget_monthly_usd = config.get("budgetMonthlyUsd") or "250"
 
 account_id = aws.get_caller_identity_output().account_id
 region = aws.get_region_output().region
@@ -97,6 +104,32 @@ notification = aws.s3.BucketNotification(
         )
     ],
     opts=pulumi.ResourceOptions(depends_on=[queue_policy]),
+)
+
+# Like the notification, this owns the bucket's entire lifecycle configuration.
+raw_lifecycle = aws.s3.BucketLifecycleConfiguration(
+    "raw-files",
+    bucket=bucket,
+    rules=[
+        aws.s3.BucketLifecycleConfigurationRuleArgs(
+            id=f"expire-{prefix.strip('/')}",
+            status="Enabled",
+            filter=aws.s3.BucketLifecycleConfigurationRuleFilterArgs(prefix=prefix),
+            expiration=aws.s3.BucketLifecycleConfigurationRuleExpirationArgs(days=raw_retention_days),
+        )
+        # jetstream-test/ is the scratch prefix for manual runs.
+        for prefix in dict.fromkeys([raw_prefix, "jetstream-test/"])
+    ]
+    + [
+        aws.s3.BucketLifecycleConfigurationRuleArgs(
+            id="abort-incomplete-uploads",
+            status="Enabled",
+            filter=aws.s3.BucketLifecycleConfigurationRuleFilterArgs(prefix=""),
+            abort_incomplete_multipart_upload=aws.s3.BucketLifecycleConfigurationRuleAbortIncompleteMultipartUploadArgs(
+                days_after_initiation=1
+            ),
+        )
+    ],
 )
 
 # --- Glue: database for the raw (bronze) Iceberg tables ---
@@ -369,8 +402,89 @@ if manage_iam:
         for kind, configuration in _optimizer_configs(optimizer_role.arn).items()
     }
 
+# --- Alerts: pipeline alarms and a cost budget, by email ---
+
+alerts = aws.sns.Topic("alerts", name="bsky-alerts")
+# Email subscriptions stay "pending confirmation" until the link AWS sends is clicked.
+aws.sns.TopicSubscription("alerts-email", topic=alerts.arn, protocol="email", endpoint=alert_email)
+
+
+def _queue_alarm(name: str, description: str, queue_name: pulumi.Input[str], **kwargs) -> aws.cloudwatch.MetricAlarm:
+    return aws.cloudwatch.MetricAlarm(
+        name,
+        name=f"bsky-{name}",
+        alarm_description=description,
+        namespace="AWS/SQS",
+        dimensions={"QueueName": queue_name},
+        period=300,
+        alarm_actions=[alerts.arn],
+        ok_actions=[alerts.arn],
+        **kwargs,
+    )
+
+
+# The ingestor writes a file every ~3.5 min, each one a notification. Missing
+# data counts as stalled too: SQS stops reporting for an idle queue.
+ingest_stalled = _queue_alarm(
+    "ingest-stalled",
+    "No raw files for 15 minutes: the ingestor stopped writing",
+    queue.name,
+    metric_name="NumberOfMessagesSent",
+    statistic="Sum",
+    comparison_operator="LessThanThreshold",
+    threshold=1,
+    evaluation_periods=3,
+    treat_missing_data="breaching",
+)
+# A commit that falls back to the visibility timeout (10 min) shouldn't page,
+# so this needs two periods over 15 min.
+loader_behind = _queue_alarm(
+    "loader-behind",
+    "Oldest raw-file notification is over 15 minutes old: the loader is stuck or down",
+    queue.name,
+    metric_name="ApproximateAgeOfOldestMessage",
+    statistic="Maximum",
+    comparison_operator="GreaterThanThreshold",
+    threshold=900,
+    evaluation_periods=2,
+    treat_missing_data="notBreaching",
+)
+poison_messages = _queue_alarm(
+    "dead-letters",
+    "Messages in the dead-letter queue: a file or notification keeps failing",
+    dlq.name,
+    metric_name="ApproximateNumberOfMessagesVisible",
+    statistic="Maximum",
+    comparison_operator="GreaterThanThreshold",
+    threshold=0,
+    evaluation_periods=1,
+    treat_missing_data="notBreaching",
+)
+
+# Account-wide: filtering by the project tag would need cost allocation tags
+# activated by an admin.
+budget = aws.budgets.Budget(
+    "monthly",
+    name="bsky-monthly",
+    budget_type="COST",
+    time_unit="MONTHLY",
+    limit_amount=budget_monthly_usd,
+    limit_unit="USD",
+    notifications=[
+        aws.budgets.BudgetNotificationArgs(
+            comparison_operator="GREATER_THAN",
+            threshold=pct,
+            threshold_type="PERCENTAGE",
+            notification_type=kind,
+            subscriber_email_addresses=[alert_email],
+        )
+        for kind, pct in [("ACTUAL", 50), ("ACTUAL", 80), ("ACTUAL", 100), ("FORECASTED", 100)]
+    ],
+)
+
 pulumi.export("queue_url", queue.url)
 pulumi.export("dead_letter_queue_url", dlq.url)
+pulumi.export("alerts_topic_arn", alerts.arn)
 pulumi.export("glue_database", database.name)
 pulumi.export("raw_location", f"s3://{bucket}/{raw_prefix.rstrip('/')}")
 pulumi.export("raw_table_location", f"{warehouse}/{glue_database}/jetstream")

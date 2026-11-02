@@ -17,10 +17,15 @@ class Mocks(pulumi.runtime.Mocks):
         # Inputs of every IAM role and policy registered, by type.
         self.iam: dict[str, list[dict]] = {t: [] for t in IAM_TYPES}
         self.optimizers: list[dict] = []
+        # Inputs of every resource, by type.
+        self.by_type: dict[str, list[dict]] = {}
 
     def new_resource(self, args: pulumi.runtime.MockResourceArgs):
         state = dict(args.inputs)
         name = args.inputs.get("name", args.name)
+        self.by_type.setdefault(args.typ, []).append(state)
+        if args.typ == "aws:sns/topic:Topic":
+            state["arn"] = f"arn:aws:sns:us-west-2:123456789012:{name}"
         if args.typ == "aws:sqs/queue:Queue":
             state["arn"] = f"arn:aws:sqs:us-west-2:123456789012:{name}"
             state["url"] = f"https://sqs.us-west-2.amazonaws.com/123456789012/{name}"
@@ -42,6 +47,7 @@ class Mocks(pulumi.runtime.Mocks):
 
 os.environ["BSKY_BUCKET"] = "test-bucket"
 os.environ["BSKY_WAREHOUSE_BUCKET"] = "test-warehouse"
+os.environ["BSKY_ALERT_EMAIL"] = "alerts@example.com"
 os.environ.pop("BSKY_PREFIX", None)
 mocks = Mocks()
 pulumi.runtime.set_mocks(mocks, preview=False)
@@ -234,3 +240,38 @@ def test_table_optimizers_for_raw_table():
 
     role = infra.optimizer_role
     return pulumi.Output.all(role.assume_role_policy, role.arn).apply(check)
+
+
+
+def test_raw_files_expire_after_a_week():
+    (lifecycle,) = mocks.by_type["aws:s3/bucketLifecycleConfiguration:BucketLifecycleConfiguration"]
+    assert lifecycle["bucket"] == "test-bucket"
+    expiring = {r["filter"]["prefix"]: r["expiration"]["days"] for r in lifecycle["rules"] if "expiration" in r}
+    assert expiring == {"jetstream/": 7, "jetstream-test/": 7}
+    assert all(r["status"] == "Enabled" for r in lifecycle["rules"])
+
+
+@pulumi.runtime.test
+def test_pipeline_alarms_notify_the_alert_topic():
+    def check(topic_arn):
+        alarms = {a["name"]: a for a in mocks.by_type["aws:cloudwatch/metricAlarm:MetricAlarm"]}
+        assert sorted(alarms) == ["bsky-dead-letters", "bsky-ingest-stalled", "bsky-loader-behind"]
+        for a in alarms.values():
+            assert a["alarmActions"] == [topic_arn] and a["okActions"] == [topic_arn]
+        stalled = alarms["bsky-ingest-stalled"]
+        assert (stalled["metricName"], stalled["dimensions"]) == ("NumberOfMessagesSent", {"QueueName": "bsky-raw-files"})
+        # An idle queue stops reporting, which must count as stalled.
+        assert stalled["treatMissingData"] == "breaching"
+        assert alarms["bsky-dead-letters"]["dimensions"] == {"QueueName": "bsky-raw-files-dlq"}
+        assert alarms["bsky-loader-behind"]["threshold"] == 900
+        (sub,) = mocks.by_type["aws:sns/topicSubscription:TopicSubscription"]
+        assert (sub["protocol"], sub["endpoint"]) == ("email", "alerts@example.com")
+
+    return infra.alerts.arn.apply(check)
+
+
+def test_monthly_budget_alerts():
+    (budget,) = mocks.by_type["aws:budgets/budget:Budget"]
+    assert (budget["limitAmount"], budget["timeUnit"]) == ("250", "MONTHLY")
+    kinds = sorted((n["notificationType"], n["threshold"]) for n in budget["notifications"])
+    assert kinds == [("ACTUAL", 50), ("ACTUAL", 80), ("ACTUAL", 100), ("FORECASTED", 100)]

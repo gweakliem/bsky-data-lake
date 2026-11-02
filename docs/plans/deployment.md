@@ -209,6 +209,7 @@ D4 is split so the loader, which recovers easily, is the first workload deployed
 ## WP D6: observability, alarms and cost controls
 
 **Status: alarms and budget done (2026-11-02)**, in the data stack: SNS topic `bsky-alerts` with an email subscription, alarms `bsky-ingest-stalled`, `bsky-loader-behind` and `bsky-dead-letters`, and the account-wide budget `bsky-monthly` ($250). Container logs in CloudWatch and job-failure alarms are still open; the latter come with D5's jobs. Raw files expire after 7 days (`rawRetentionDays`). That also bounds how far back a replay can reach.
+- **Tested 2026-11-02:** scaling the loader to 0 fired `bsky-loader-behind` after 26 min, and it cleared 8 min after scaling back. Scaling the ingestor to 0 fired `bsky-ingest-stalled` after 19 min, and it cleared 4 min after scaling back; the ingestor resumed from its last file and replayed the gap. A stale `s3:TestEvent` in the DLQ fired `bsky-dead-letters`. Every email arrived.
 
 - **Depends on:** D4 (expand as D5 adds jobs).
 - **Logs:** container logs to CloudWatch (the EKS CloudWatch Observability add-on, or Fluent Bit), with 14–30 day retention.

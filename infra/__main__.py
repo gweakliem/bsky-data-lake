@@ -277,6 +277,57 @@ table_optimizer_policy_document = pulumi.Output.all(account_id, region).apply(
 )
 
 
+# --- IAM: the silver job reads the bronze table and writes the silver tables ---
+
+silver_policy_document = pulumi.Output.all(account_id, region).apply(
+    lambda args: json.dumps(
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Sid": "ListTableFiles",
+                    "Effect": "Allow",
+                    "Action": "s3:ListBucket",
+                    "Resource": warehouse_bucket_arn,
+                    "Condition": {"StringLike": {"s3:prefix": [f"iceberg/{glue_database}/*", f"iceberg/{silver_database_name}/*"]}},
+                },
+                {
+                    "Sid": "ReadBronze",
+                    "Effect": "Allow",
+                    "Action": "s3:GetObject",
+                    "Resource": f"{warehouse_bucket_arn}/iceberg/{glue_database}/*",
+                },
+                {
+                    "Sid": "WriteSilver",
+                    "Effect": "Allow",
+                    "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+                    "Resource": f"{warehouse_bucket_arn}/iceberg/{silver_database_name}/*",
+                },
+                {
+                    "Sid": "ReadBronzeCatalog",
+                    "Effect": "Allow",
+                    "Action": ["glue:GetDatabase", "glue:GetTable", "glue:GetTables"],
+                    "Resource": [
+                        f"arn:aws:glue:{args[1]}:{args[0]}:catalog",
+                        f"arn:aws:glue:{args[1]}:{args[0]}:database/{glue_database}",
+                        f"arn:aws:glue:{args[1]}:{args[0]}:table/{glue_database}/*",
+                    ],
+                },
+                {
+                    "Sid": "WriteSilverCatalog",
+                    "Effect": "Allow",
+                    "Action": ["glue:GetDatabase", "glue:GetTable", "glue:GetTables", "glue:CreateTable", "glue:UpdateTable"],
+                    "Resource": [
+                        f"arn:aws:glue:{args[1]}:{args[0]}:catalog",
+                        f"arn:aws:glue:{args[1]}:{args[0]}:database/{silver_database_name}",
+                        f"arn:aws:glue:{args[1]}:{args[0]}:table/{silver_database_name}/*",
+                    ],
+                },
+            ],
+        }
+    )
+)
+
 # --- Container logs: Fluent Bit on the cluster ships pod logs here ---
 
 # Created here, not by Fluent Bit, so it gets a retention period and the shipper
@@ -362,6 +413,16 @@ if manage_iam:
     fluent_bit_role = _pod_role("fluent-bit", "bsky-fluent-bit", "EKS pod role for the Fluent Bit log shipper")
     aws.iam.RolePolicyAttachment("fluent-bit", role=fluent_bit_role.name, policy_arn=fluent_bit_policy.arn)
     pulumi.export("fluent_bit_role_arn", fluent_bit_role.arn)
+
+    silver_policy = bsky_iam.policy(
+        "silver",
+        name="bsky-silver",
+        description="Read the bronze Iceberg table and write the silver tables",
+        policy=silver_policy_document,
+    )
+    silver_role = _pod_role("silver", "bsky-silver", "EKS pod role for the silver job")
+    aws.iam.RolePolicyAttachment("silver", role=silver_role.name, policy_arn=silver_policy.arn)
+    pulumi.export("silver_role_arn", silver_role.arn)
 
     # --- Glue table optimizers: compaction, snapshot retention, orphan files ---
     # Maintenance runs in the catalog rather than the pipeline, so moving to
@@ -544,3 +605,4 @@ pulumi.export("loader_policy_document", loader_policy_document)
 pulumi.export("ingestor_policy_document", ingestor_policy_document)
 pulumi.export("table_optimizer_policy_document", table_optimizer_policy_document)
 pulumi.export("fluent_bit_policy_document", fluent_bit_policy_document)
+pulumi.export("silver_policy_document", silver_policy_document)

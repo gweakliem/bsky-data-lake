@@ -1,6 +1,7 @@
 """Process new bronze rows into the silver tables.
 
-A run covers a window of bronze `ingested_at` after the last run's watermark.
+A run covers a window of bronze `ingested_at` after the last run's watermark,
+holding at most `max_rows` rows (memory grows with a window's rows).
 It parses every row once (Python, via mapInArrow) into a staging Parquet
 directory, then appends each table's rows from there in one Iceberg commit per
 table, and finally records the window in `silver_runs`. Sail's cache() doesn't
@@ -71,7 +72,7 @@ class SilverJob:
         namespace: str,
         location: str,
         staging_dir: str | Path,
-        window: dt.timedelta = dt.timedelta(hours=1),
+        max_rows: int = 500_000,
         settle: dt.timedelta = dt.timedelta(minutes=5),
     ):
         self.spark = spark
@@ -79,7 +80,7 @@ class SilverJob:
         self.namespace = namespace
         self.location = location.rstrip("/")
         self.staging_dir = Path(staging_dir)
-        self.window = window
+        self.max_rows = max_rows
         self.settle = settle
         spark.conf.set("spark.sql.session.timeZone", "UTC")
 
@@ -106,22 +107,25 @@ class SilverJob:
         """(after, through] of bronze ingested_at for the next run, or None when caught up.
 
         Stops `settle` short of now, so a loader commit still in flight (its
-        ingested_at is taken before it commits) lands in a later window.
+        ingested_at is taken before it commits) lands in a later window. The
+        window ends at the last ingested_at that keeps it within max_rows. Every
+        row of a loader commit shares one ingested_at, so a window always takes
+        at least one whole commit (at most ~850k rows at the loader's 128 MB cap).
+        Time doesn't bound rows: a backlog upload loads days of events in hours.
         """
         after = self.watermark()
-        bronze = self.spark.table(self.bronze_table)
+        bronze = self.spark.table(self.bronze_table).where(F.col("ingested_at") <= F.lit(now - self.settle))
         if after is not None:
             bronze = bronze.where(F.col("ingested_at") > F.lit(after))
-        cutoff = now - self.settle
-        first = _utc(bronze.where(F.col("ingested_at") <= F.lit(cutoff)).agg(F.min("ingested_at")).collect()[0][0])
-        if first is None:
+        commits = bronze.groupBy("ingested_at").count().orderBy("ingested_at").collect()
+        if not commits:
             return None
-        through = _utc(
-            bronze.where(F.col("ingested_at") <= F.lit(min(cutoff, first + self.window)))
-            .agg(F.max("ingested_at"))
-            .collect()[0][0]
-        )
-        return after, through
+        through, rows = None, 0
+        for commit in commits:
+            if through is not None and rows + commit["count"] > self.max_rows:
+                break
+            through, rows = commit.ingested_at, rows + commit["count"]
+        return after, _utc(through)
 
     def run(self, now: dt.datetime | None = None) -> dict | None:
         """Process one window. Returns the run's counts, or None when caught up."""

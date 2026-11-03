@@ -161,6 +161,83 @@ ingestor = k8s.apps.v1.Deployment(
     opts=opts,
 )
 
+# --- Silver job: hourly, processes new bronze rows into the silver tables ---
+
+silver_labels = {"app.kubernetes.io/name": "silver", "app.kubernetes.io/part-of": "bsky-data-lake"}
+silver_image_tag = config.require("silverImageTag")
+# Memory grows with a window's rows, about 1 GB + 2 GB per million (see
+# silver/CLAUDE.md), so the row cap and the memory limit are set together.
+silver_max_rows = config.get_int("silverMaxRows") or 500_000
+silver_memory_limit = config.get("silverMemoryLimit") or "3Gi"
+
+# The name must match the platform stack's Pod Identity association.
+silver_sa = k8s.core.v1.ServiceAccount(
+    "silver",
+    metadata=k8s.meta.v1.ObjectMetaArgs(name="silver", namespace=ns),
+    opts=opts,
+)
+
+silver_image = repository_urls.apply(lambda urls: f"{urls['silver']}:{silver_image_tag}")
+
+silver = k8s.batch.v1.CronJob(
+    "silver",
+    metadata=k8s.meta.v1.ObjectMetaArgs(name="silver", namespace=ns, labels=silver_labels),
+    spec=k8s.batch.v1.CronJobSpecArgs(
+        # :05, after the loader's commits for the previous hour have settled.
+        schedule="5 * * * *",
+        time_zone="Etc/UTC",
+        # A run works until caught up, so a slow one (a backlog) just delays
+        # the next instead of racing it on the same window.
+        concurrency_policy="Forbid",
+        successful_jobs_history_limit=3,
+        failed_jobs_history_limit=3,
+        job_template=k8s.batch.v1.JobTemplateSpecArgs(
+            metadata=k8s.meta.v1.ObjectMetaArgs(labels=silver_labels),
+            spec=k8s.batch.v1.JobSpecArgs(
+                backoff_limit=2,
+                # Under an hour, so a stuck run can't block the next schedule.
+                active_deadline_seconds=55 * 60,
+                template=k8s.core.v1.PodTemplateSpecArgs(
+                    metadata=k8s.meta.v1.ObjectMetaArgs(labels=silver_labels),
+                    spec=k8s.core.v1.PodSpecArgs(
+                        service_account_name=silver_sa.metadata.name,
+                        restart_policy="Never",
+                        security_context=pod_security,
+                        containers=[
+                            k8s.core.v1.ContainerArgs(
+                                name="silver",
+                                image=silver_image,
+                                env=[
+                                    k8s.core.v1.EnvVarArgs(
+                                        name="BSKY_SILVER_LOCATION", value=data.require_output("silver_location")
+                                    ),
+                                    k8s.core.v1.EnvVarArgs(name="BSKY_SILVER_STAGING_DIR", value="/staging"),
+                                    k8s.core.v1.EnvVarArgs(name="AWS_REGION", value=region),
+                                    k8s.core.v1.EnvVarArgs(name="LOG_LEVEL", value=config.get("silverLogLevel") or "INFO"),
+                                ],
+                                args=["--max-rows", str(silver_max_rows)],
+                                resources=k8s.core.v1.ResourceRequirementsArgs(
+                                    requests={"cpu": "500m", "memory": silver_memory_limit},
+                                    limits={"memory": silver_memory_limit},
+                                ),
+                                volume_mounts=[k8s.core.v1.VolumeMountArgs(name="staging", mount_path="/staging")],
+                                security_context=container_security,
+                            )
+                        ],
+                        # One window's parsed rows; removed after each window.
+                        volumes=[
+                            k8s.core.v1.VolumeArgs(
+                                name="staging", empty_dir=k8s.core.v1.EmptyDirVolumeSourceArgs(size_limit="4Gi")
+                            )
+                        ],
+                    ),
+                ),
+            ),
+        ),
+    ),
+    opts=opts,
+)
+
 # --- Fluent Bit: container logs to CloudWatch ---
 
 # One pod per node (a DaemonSet) tails the node's container log files and ships

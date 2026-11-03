@@ -47,10 +47,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Local directory for the parsed batch [env: BSKY_SILVER_STAGING_DIR] (default: a temp dir)",
     )
     p.add_argument(
-        "--window-minutes",
-        type=float,
-        default=60,
-        help="Max span of bronze ingested_at per run; bounds a run's size (default: %(default)s)",
+        "--max-rows",
+        type=int,
+        default=500_000,
+        help="Max bronze rows per window; bounds memory, about 1 GB + 2 GB per million rows (default: %(default)s)",
     )
     p.add_argument(
         "--settle-minutes",
@@ -112,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
             args.namespace,
             args.location,
             args.staging_dir or staging.name,
-            window=dt.timedelta(minutes=args.window_minutes),
+            max_rows=args.max_rows,
             settle=dt.timedelta(minutes=args.settle_minutes),
         )
         job.ensure_tables()

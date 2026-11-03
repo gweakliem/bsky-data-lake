@@ -153,17 +153,22 @@ def test_recent_rows_wait_for_the_next_run(job):
     assert sum(second["staged"].values()) == 10
 
 
-def test_window_bounds_a_run_and_skips_gaps(job):
-    add_bronze(job, payloads()[:10], INGESTED - dt.timedelta(hours=5))
-    add_bronze(job, payloads()[10:20], INGESTED)
+def test_windows_are_bounded_by_rows_in_whole_commits(job):
+    # Three loader commits: 10, 10 and 10 rows.
+    for i, ingested in enumerate([INGESTED - dt.timedelta(hours=5), INGESTED - dt.timedelta(minutes=30), INGESTED]):
+        add_bronze(job, payloads()[i * 10 : (i + 1) * 10], ingested)
+    job.max_rows = 25
 
-    assert sum(job.run(NOW)["staged"].values()) == 10
+    assert sum(job.run(NOW)["staged"].values()) == 20
+    # A commit is never split, even when it alone is over the cap.
+    job.max_rows = 5
     assert sum(job.run(NOW)["staged"].values()) == 10
     assert job.run(NOW) is None
 
     runs = job.spark.table(job.table(RUNS)).orderBy("bronze_through").collect()
-    assert [r.bronze_through.astimezone(dt.timezone.utc) for r in runs] == [INGESTED - dt.timedelta(hours=5), INGESTED]
+    assert [r.bronze_through.astimezone(dt.timezone.utc) for r in runs] == [INGESTED - dt.timedelta(minutes=30), INGESTED]
     assert runs[1].bronze_after == runs[0].bronze_through
+
 
 
 def test_tables_partition_by_day(job, tmp_path):

@@ -12,6 +12,7 @@ ACCOUNT = "123456789012"
 LOADER_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/bsky/bsky-iceberg-loader"
 INGESTOR_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/bsky/bsky-ingestor"
 FLUENT_BIT_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/bsky/bsky-fluent-bit"
+SILVER_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/bsky/bsky-silver"
 BOUNDARY_ARN = f"arn:aws:iam::{ACCOUNT}:policy/bsky-workload-boundary"
 
 
@@ -29,6 +30,7 @@ class Mocks(pulumi.runtime.Mocks):
                     "loader_role_arn": LOADER_ROLE_ARN,
                     "ingestor_role_arn": INGESTOR_ROLE_ARN,
                     "fluent_bit_role_arn": FLUENT_BIT_ROLE_ARN,
+                    "silver_role_arn": SILVER_ROLE_ARN,
                 }
             }
         self.resources[args.typ].append(state)
@@ -166,7 +168,7 @@ def test_ecr_scans_and_expires():
         assert [r["selection"]["tagStatus"] for r in rules] == ["untagged", "tagged"]
 
     repo = platform.repositories["iceberg-loader"]
-    assert sorted(platform.repositories) == ["iceberg-loader", "ingest"]
+    assert sorted(platform.repositories) == ["iceberg-loader", "ingest", "silver"]
     lifecycle = mocks.resources["aws:ecr/lifecyclePolicy:LifecyclePolicy"][0]
     return pulumi.Output.all(repo.image_scanning_configuration, lifecycle["policy"]).apply(check)
 
@@ -179,3 +181,14 @@ def test_every_role_in_delegated_scope():
         assert r.get("path") == "/bsky/", r
         assert r.get("permissionsBoundary") == BOUNDARY_ARN, r
     assert not mocks.resources["aws:iam/policy:Policy"]
+
+
+@pulumi.runtime.test
+def test_silver_pod_identity_uses_data_stack_role():
+    def check(args):
+        namespace, service_account, role_arn = args
+        assert (namespace, service_account) == ("bsky", "silver")
+        assert role_arn == SILVER_ROLE_ARN
+
+    a = platform.pod_identities["silver"]
+    return pulumi.Output.all(a.namespace, a.service_account, a.role_arn).apply(check)

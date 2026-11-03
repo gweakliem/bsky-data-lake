@@ -223,7 +223,7 @@ ecr_lifecycle = json.dumps(
 )
 
 repositories = {}
-for image in ["iceberg-loader", "ingest"]:
+for image in ["iceberg-loader", "ingest", "silver"]:
     repo = aws.ecr.Repository(
         image,
         name=f"bsky/{image}",
@@ -249,6 +249,13 @@ pod_identities = {
         namespace=namespace,
         service_account="ingestor",
         role_arn=data.require_output("ingestor_role_arn"),
+    ),
+    "silver": aws.eks.PodIdentityAssociation(
+        "silver",
+        cluster_name=cluster.name,
+        namespace=namespace,
+        service_account="silver",
+        role_arn=data.require_output("silver_role_arn"),
     ),
     # Cluster-wide log shipping, so it lives outside the workloads' namespace.
     "fluent-bit": aws.eks.PodIdentityAssociation(

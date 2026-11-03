@@ -7,15 +7,17 @@ import pulumi
 
 REPO_URL = "123456789012.dkr.ecr.us-west-2.amazonaws.com/bsky/iceberg-loader"
 INGEST_REPO_URL = "123456789012.dkr.ecr.us-west-2.amazonaws.com/bsky/ingest"
+SILVER_REPO_URL = "123456789012.dkr.ecr.us-west-2.amazonaws.com/bsky/silver"
 STACK_OUTPUTS = {
     "kubeconfig": "{}",
     "namespace": "bsky",
-    "repository_urls": {"iceberg-loader": REPO_URL, "ingest": INGEST_REPO_URL},
+    "repository_urls": {"iceberg-loader": REPO_URL, "ingest": INGEST_REPO_URL, "silver": SILVER_REPO_URL},
     "queue_url": "https://sqs.us-west-2.amazonaws.com/123456789012/bsky-raw-files",
     "raw_table_location": "s3://test-warehouse/iceberg/bsky_raw/jetstream",
     "raw_location": "s3://test-bucket/jetstream",
     "logging_namespace": "logging",
     "container_log_group": "/bsky/containers",
+    "silver_location": "s3://test-warehouse/iceberg/bsky_silver",
 }
 
 
@@ -32,6 +34,7 @@ class Mocks(pulumi.runtime.Mocks):
 pulumi.runtime.set_mocks(Mocks(), project="bsky-apps", stack="dev", preview=False)
 pulumi.runtime.set_config("bsky-apps:loaderImageTag", "abc1234")
 pulumi.runtime.set_config("bsky-apps:ingestImageTag", "def5678")
+pulumi.runtime.set_config("bsky-apps:silverImageTag", "fed4321")
 
 _spec = importlib.util.spec_from_file_location("apps_stack", Path(__file__).with_name("__main__.py"))
 apps = importlib.util.module_from_spec(_spec)
@@ -114,3 +117,25 @@ def test_fluent_bit_daemonset():
         assert mounts["varlog"]["read_only"]
 
     return apps.fluent_bit.spec.apply(check)
+
+
+@pulumi.runtime.test
+def test_silver_cronjob():
+    def check(spec):
+        assert spec["schedule"] == "5 * * * *"
+        assert spec["concurrency_policy"] == "Forbid"
+        job = spec["job_template"]["spec"]
+        assert job["backoff_limit"] == 2
+        assert job["active_deadline_seconds"] < 3600
+        pod = job["template"]["spec"]
+        # Must match the platform stack's Pod Identity association.
+        assert pod["service_account_name"] == "silver"
+        assert pod["restart_policy"] == "Never"
+        (container,) = pod["containers"]
+        assert container["image"] == f"{SILVER_REPO_URL}:fed4321"
+        env = {e["name"]: e["value"] for e in container["env"]}
+        assert env["BSKY_SILVER_LOCATION"] == STACK_OUTPUTS["silver_location"]
+        assert env["BSKY_SILVER_STAGING_DIR"] == container["volume_mounts"][0]["mount_path"]
+        assert not any(k.startswith("AWS_ACCESS") or k.startswith("AWS_SECRET") for k in env)
+
+    return apps.silver.spec.apply(check)

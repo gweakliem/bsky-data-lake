@@ -314,3 +314,21 @@ def test_monthly_budget_alerts():
     assert (budget["limitAmount"], budget["timeUnit"]) == ("250", "MONTHLY")
     kinds = sorted((n["notificationType"], n["threshold"]) for n in budget["notifications"])
     assert kinds == [("ACTUAL", 50), ("ACTUAL", 80), ("ACTUAL", 100), ("FORECASTED", 100)]
+
+
+@pulumi.runtime.test
+def test_silver_reads_bronze_and_writes_only_silver():
+    def check(args):
+        policy, arn = args
+        stmts = {s["Sid"]: s for s in json.loads(policy)["Statement"]}
+        assert stmts["ReadBronze"]["Action"] == "s3:GetObject"
+        assert stmts["ReadBronze"]["Resource"] == "arn:aws:s3:::test-warehouse/iceberg/bsky_raw/*"
+        assert stmts["WriteSilver"]["Resource"] == "arn:aws:s3:::test-warehouse/iceberg/bsky_silver/*"
+        # Bronze's catalog entries are read-only; tables are created only in silver.
+        assert not any(a in stmts["ReadBronzeCatalog"]["Action"] for a in ["glue:CreateTable", "glue:UpdateTable"])
+        assert all("bsky_raw" not in r for r in stmts["WriteSilverCatalog"]["Resource"])
+        # No access to the raw-file bucket at all.
+        assert "test-bucket" not in policy
+        assert arn == "arn:aws:iam::123456789012:role/bsky/bsky-silver"
+
+    return pulumi.Output.all(infra.silver_policy_document, infra.silver_role.arn).apply(check)

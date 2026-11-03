@@ -1,6 +1,7 @@
 # infra
 
 A Pulumi Python stack (uv toolchain) for the SQS queue + DLQ, the S3 bucket notification, the Glue database `bsky_raw` and the loader's IAM policy. The raw and warehouse buckets are pre-existing and not managed.
+- **Athena:** query in the `bsky` workgroup. It enforces its results location, the stack's own `bsky-athena-results-<account>-<region>-an` bucket (account-regional namespace), where results expire after `athenaResultsRetentionDays` (7).
 - **Three Pulumi projects**, each its own uv environment with mock tests (`uv run pytest` in its directory), linked by `StackReference` (`organization/<project>/<stack>`):
   - `infra/` (`bsky-data-lake`, the data stack): queues, notification, Glue, and the workload IAM roles and policies.
   - `infra/platform/` (`bsky-platform`): VPC, EKS Auto Mode cluster, ECR, and Pod Identity associations (service account → data-stack role). It imports `../bsky_iam.py`.

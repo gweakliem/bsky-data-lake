@@ -283,8 +283,8 @@ def test_table_optimizers_for_raw_table():
 
 
 def test_raw_files_expire_after_a_week():
-    (lifecycle,) = mocks.by_type["aws:s3/bucketLifecycleConfiguration:BucketLifecycleConfiguration"]
-    assert lifecycle["bucket"] == "test-bucket"
+    lifecycles = mocks.by_type["aws:s3/bucketLifecycleConfiguration:BucketLifecycleConfiguration"]
+    (lifecycle,) = [lc for lc in lifecycles if lc["bucket"] == "test-bucket"]
     expiring = {r["filter"]["prefix"]: r["expiration"]["days"] for r in lifecycle["rules"] if "expiration" in r}
     assert expiring == {"jetstream/": 7, "jetstream-test/": 7}
     assert all(r["status"] == "Enabled" for r in lifecycle["rules"])
@@ -332,3 +332,28 @@ def test_silver_reads_bronze_and_writes_only_silver():
         assert arn == "arn:aws:iam::123456789012:role/bsky/bsky-silver"
 
     return pulumi.Output.all(infra.silver_policy_document, infra.silver_role.arn).apply(check)
+
+
+@pulumi.runtime.test
+def test_athena_workgroup_writes_to_its_own_bucket():
+    def check(name):
+        assert name == "bsky-athena-results-123456789012-us-west-2-an"
+        (bucket,) = mocks.by_type["aws:s3/bucket:Bucket"]
+        assert bucket["bucketNamespace"] == "account-regional"
+        (block,) = mocks.by_type["aws:s3/bucketPublicAccessBlock:BucketPublicAccessBlock"]
+        assert block["bucket"] == name
+        assert all(block[k] for k in ["blockPublicAcls", "blockPublicPolicy", "ignorePublicAcls", "restrictPublicBuckets"])
+        (lifecycle,) = [
+            lc
+            for lc in mocks.by_type["aws:s3/bucketLifecycleConfiguration:BucketLifecycleConfiguration"]
+            if lc["bucket"] == name
+        ]
+        (rule,) = lifecycle["rules"]
+        assert (rule["filter"]["prefix"], rule["expiration"]["days"]) == ("", 7)
+        (wg,) = mocks.by_type["aws:athena/workgroup:Workgroup"]
+        conf = wg["configuration"]
+        assert conf["enforceWorkgroupConfiguration"] is True
+        assert conf["resultConfiguration"]["outputLocation"] == f"s3://{name}/"
+        assert conf["engineVersion"]["selectedEngineVersion"] == "Athena engine version 3"
+
+    return infra.athena_results.bucket.apply(check)

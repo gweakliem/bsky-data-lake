@@ -3,7 +3,8 @@
 The raw-file bucket and the warehouse bucket already exist and are not managed
 here; this stack wires the raw bucket's ObjectCreated notifications to the
 queue the Iceberg loader consumes and creates the Glue database the raw
-Iceberg table lives in, located in the warehouse bucket.
+Iceberg table lives in, located in the warehouse bucket. Athena's results
+bucket is the one bucket it creates.
 """
 
 import json
@@ -43,6 +44,7 @@ if not alert_email:
 budget_monthly_usd = config.get("budgetMonthlyUsd") or "250"
 container_log_group = config.get("containerLogGroup") or "/bsky/containers"
 container_log_retention_days = config.get_int("containerLogRetentionDays") or 14
+athena_results_retention_days = config.get_int("athenaResultsRetentionDays") or 7
 
 account_id = aws.get_caller_identity_output().account_id
 region = aws.get_region_output().region
@@ -133,6 +135,56 @@ raw_lifecycle = aws.s3.BucketLifecycleConfiguration(
             ),
         )
     ],
+)
+
+# --- Athena: a workgroup for ad hoc queries, with its own results bucket ---
+
+athena_results = aws.s3.Bucket(
+    "athena-results",
+    bucket=pulumi.Output.concat("bsky-athena-results-", account_id, "-", region, "-an"),
+    bucket_namespace="account-regional",
+    # Query results are disposable.
+    force_destroy=True,
+)
+aws.s3.BucketPublicAccessBlock(
+    "athena-results",
+    bucket=athena_results.bucket,
+    block_public_acls=True,
+    block_public_policy=True,
+    ignore_public_acls=True,
+    restrict_public_buckets=True,
+)
+athena_results_lifecycle = aws.s3.BucketLifecycleConfiguration(
+    "athena-results",
+    bucket=athena_results.bucket,
+    rules=[
+        aws.s3.BucketLifecycleConfigurationRuleArgs(
+            id="expire-results",
+            status="Enabled",
+            filter=aws.s3.BucketLifecycleConfigurationRuleFilterArgs(prefix=""),
+            expiration=aws.s3.BucketLifecycleConfigurationRuleExpirationArgs(days=athena_results_retention_days),
+            abort_incomplete_multipart_upload=aws.s3.BucketLifecycleConfigurationRuleAbortIncompleteMultipartUploadArgs(
+                days_after_initiation=1
+            ),
+        )
+    ],
+)
+# Enforced, so every query in it writes to the bucket above whatever the
+# client's own settings say.
+athena_workgroup = aws.athena.Workgroup(
+    "bsky",
+    name="bsky",
+    description="Ad hoc queries over the Bluesky data lake",
+    force_destroy=True,
+    configuration=aws.athena.WorkgroupConfigurationArgs(
+        enforce_workgroup_configuration=True,
+        engine_version=aws.athena.WorkgroupConfigurationEngineVersionArgs(
+            selected_engine_version="Athena engine version 3"
+        ),
+        result_configuration=aws.athena.WorkgroupConfigurationResultConfigurationArgs(
+            output_location=pulumi.Output.concat("s3://", athena_results.bucket, "/"),
+        ),
+    ),
 )
 
 # --- Glue: database for the raw (bronze) Iceberg tables ---
@@ -596,6 +648,8 @@ pulumi.export("queue_url", queue.url)
 pulumi.export("dead_letter_queue_url", dlq.url)
 pulumi.export("alerts_topic_arn", alerts.arn)
 pulumi.export("container_log_group", container_logs.name)
+pulumi.export("athena_workgroup", athena_workgroup.name)
+pulumi.export("athena_results_bucket", athena_results.bucket)
 pulumi.export("glue_database", database.name)
 pulumi.export("silver_glue_database", silver_database.name)
 pulumi.export("silver_location", f"{warehouse}/{silver_database_name}")

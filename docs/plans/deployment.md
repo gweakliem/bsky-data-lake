@@ -238,7 +238,7 @@ D4 is split so the loader, which recovers easily, is the first workload deployed
 
 ## Runbooks
 
-Write these alongside D4–D6 in `docs/runbooks/`:
+Monitoring and routine operations are in [`docs/runbook.md`](../runbook.md), which covers the first item below. Write the rest alongside D4–D6:
 
 - deploy and roll back (image tag config + `pulumi up`);
 - replay the DLQ: inspect, fix, and redrive to the main queue;

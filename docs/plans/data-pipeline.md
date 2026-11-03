@@ -74,6 +74,8 @@ Prerequisite for unattended running and for D4.
 
 ## WP S1: bronze survey and fixtures
 
+**Status: done (2026-11-02).** Numbers in `notes/bronze-survey.md`; 184 fixtures in `silver/tests/fixtures/jetstream.jsonl`; scripts in `silver/scripts/`. About 3.36M posts/day. It adds `app.bsky.embed.gallery` (0.3% of posts) to S2's embed types; see the note's implications section.
+
 - **Goal:** ground the silver schema in real data.
 - **Tasks:**
   - Query bronze (Sail, or DuckDB over the table) for the mix of `kind`, `commit.collection` and `commit.operation`.

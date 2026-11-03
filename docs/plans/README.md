@@ -19,7 +19,7 @@ D0 ──► D2 ──────────┼──► D4a (loader) ──�
 D0 ──► D3 ──────────┘                          ▲
                                      P1 + ingestor image
 
-Done: D0 (IAM access), D3 (cluster), P1 (cursor resume), D4a (loader on EKS) and D4b (ingestor on EKS). D1 and D2 are done apart from CI.
+Done: D0 (IAM access), D3 (cluster), P1 (cursor resume), S1 (bronze survey), D4a (loader on EKS), D4b (ingestor on EKS) and D6 apart from job alarms. D1 and D2 are done apart from CI.
 D5 adds each pipeline job (S2, C2, E2, E3) as it lands.
 ```
 

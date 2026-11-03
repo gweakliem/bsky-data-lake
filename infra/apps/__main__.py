@@ -7,6 +7,8 @@ configured in this project. Deploying a new image is
 rolling back is the same with the previous tag.
 """
 
+import hashlib
+
 import pulumi
 import pulumi_kubernetes as k8s
 
@@ -152,6 +154,159 @@ ingestor = k8s.apps.v1.Deployment(
                             run_as_user=65532,
                         ),
                     )
+                ],
+            ),
+        ),
+    ),
+    opts=opts,
+)
+
+# --- Fluent Bit: container logs to CloudWatch ---
+
+# One pod per node (a DaemonSet) tails the node's container log files and ships
+# them to the data stack's log group. Only the shipping is AWS-specific: on
+# another cloud, swap the [OUTPUT] section.
+log_namespaces = config.get_object("logNamespaces") or ["bsky"]
+fluent_bit_image = config.get("fluentBitImage") or "cr.fluentbit.io/fluent/fluent-bit:5.1.2"
+logging_labels = {"app.kubernetes.io/name": "fluent-bit", "app.kubernetes.io/part-of": "bsky-data-lake"}
+
+logging_namespace = k8s.core.v1.Namespace(
+    "logging",
+    metadata=k8s.meta.v1.ObjectMetaArgs(name=platform.require_output("logging_namespace")),
+    opts=opts,
+)
+logging_ns = logging_namespace.metadata.name
+
+# The name must match the platform stack's Pod Identity association.
+fluent_bit_sa = k8s.core.v1.ServiceAccount(
+    "fluent-bit",
+    metadata=k8s.meta.v1.ObjectMetaArgs(name="fluent-bit", namespace=logging_ns),
+    opts=opts,
+)
+# The kubernetes filter looks up each log line's pod to name its stream.
+fluent_bit_role = k8s.rbac.v1.ClusterRole(
+    "fluent-bit",
+    metadata=k8s.meta.v1.ObjectMetaArgs(name="fluent-bit"),
+    rules=[
+        k8s.rbac.v1.PolicyRuleArgs(api_groups=[""], resources=["pods", "namespaces"], verbs=["get", "list", "watch"])
+    ],
+    opts=opts,
+)
+k8s.rbac.v1.ClusterRoleBinding(
+    "fluent-bit",
+    metadata=k8s.meta.v1.ObjectMetaArgs(name="fluent-bit"),
+    role_ref=k8s.rbac.v1.RoleRefArgs(api_group="rbac.authorization.k8s.io", kind="ClusterRole", name=fluent_bit_role.metadata.name),
+    subjects=[k8s.rbac.v1.SubjectArgs(kind="ServiceAccount", name=fluent_bit_sa.metadata.name, namespace=logging_ns)],
+    opts=opts,
+)
+
+
+def _fluent_bit_conf(log_group: str) -> str:
+    """The tail DB keeps read positions across restarts, so nothing is shipped
+    twice or skipped. Each pod's container gets its own stream, holding just
+    the log line (log_key), not the metadata Fluent Bit wraps around it."""
+    # Container log files are named <pod>_<namespace>_<container>-<id>.log.
+    paths = ",".join(f"/var/log/containers/*_{n}_*.log" for n in log_namespaces)
+    return f"""\
+[SERVICE]
+    Flush         5
+    Log_Level     info
+    HTTP_Server   On
+    HTTP_Listen   0.0.0.0
+    HTTP_Port     2020
+    Health_Check  On
+
+[INPUT]
+    Name              tail
+    Tag               kube.*
+    Path              {paths}
+    multiline.parser  cri
+    DB                /var/fluent-bit/state/tail.db
+    Mem_Buf_Limit     5MB
+    Skip_Long_Lines   On
+
+[FILTER]
+    Name         kubernetes
+    Match        kube.*
+    Labels       Off
+    Annotations  Off
+
+[OUTPUT]
+    Name                 cloudwatch_logs
+    Match                kube.*
+    region               {region}
+    log_group_name       {log_group}
+    auto_create_group    Off
+    log_stream_template  $kubernetes['pod_name'].$kubernetes['container_name']
+    log_stream_prefix    unknown-
+    log_key              log
+"""
+
+
+fluent_bit_conf = data.require_output("container_log_group").apply(_fluent_bit_conf)
+fluent_bit_config = k8s.core.v1.ConfigMap(
+    "fluent-bit",
+    metadata=k8s.meta.v1.ObjectMetaArgs(name="fluent-bit", namespace=logging_ns),
+    data={"fluent-bit.conf": fluent_bit_conf},
+    opts=opts,
+)
+
+fluent_bit = k8s.apps.v1.DaemonSet(
+    "fluent-bit",
+    metadata=k8s.meta.v1.ObjectMetaArgs(name="fluent-bit", namespace=logging_ns, labels=logging_labels),
+    spec=k8s.apps.v1.DaemonSetSpecArgs(
+        selector=k8s.meta.v1.LabelSelectorArgs(match_labels=logging_labels),
+        template=k8s.core.v1.PodTemplateSpecArgs(
+            metadata=k8s.meta.v1.ObjectMetaArgs(
+                labels=logging_labels,
+                # Pods don't reload a changed ConfigMap; a new hash rolls them.
+                annotations={"bsky/config-sha256": fluent_bit_conf.apply(lambda c: hashlib.sha256(c.encode()).hexdigest())},
+            ),
+            spec=k8s.core.v1.PodSpecArgs(
+                service_account_name=fluent_bit_sa.metadata.name,
+                # No tolerations: Auto Mode's tainted system nodes run only its
+                # own add-ons, which don't log to the namespaces shipped here.
+                containers=[
+                    k8s.core.v1.ContainerArgs(
+                        name="fluent-bit",
+                        image=fluent_bit_image,
+                        args=["-c", "/fluent-bit/etc/bsky/fluent-bit.conf"],
+                        resources=k8s.core.v1.ResourceRequirementsArgs(
+                            requests={"cpu": "50m", "memory": "64Mi"},
+                            limits={"memory": "128Mi"},
+                        ),
+                        liveness_probe=k8s.core.v1.ProbeArgs(
+                            http_get=k8s.core.v1.HTTPGetActionArgs(path="/api/v1/health", port=2020),
+                            initial_delay_seconds=10,
+                            period_seconds=30,
+                        ),
+                        volume_mounts=[
+                            k8s.core.v1.VolumeMountArgs(name="config", mount_path="/fluent-bit/etc/bsky"),
+                            k8s.core.v1.VolumeMountArgs(name="varlog", mount_path="/var/log", read_only=True),
+                            k8s.core.v1.VolumeMountArgs(name="state", mount_path="/var/fluent-bit/state"),
+                        ],
+                        # Root to read the node's root-owned log files, but with
+                        # no capabilities and a read-only filesystem.
+                        security_context=k8s.core.v1.SecurityContextArgs(
+                            run_as_user=0,
+                            read_only_root_filesystem=True,
+                            allow_privilege_escalation=False,
+                            capabilities=k8s.core.v1.CapabilitiesArgs(drop=["ALL"]),
+                        ),
+                    )
+                ],
+                volumes=[
+                    k8s.core.v1.VolumeArgs(
+                        name="config",
+                        config_map=k8s.core.v1.ConfigMapVolumeSourceArgs(name=fluent_bit_config.metadata.name),
+                    ),
+                    k8s.core.v1.VolumeArgs(name="varlog", host_path=k8s.core.v1.HostPathVolumeSourceArgs(path="/var/log")),
+                    k8s.core.v1.VolumeArgs(
+                        name="state",
+                        host_path=k8s.core.v1.HostPathVolumeSourceArgs(
+                            path="/var/fluent-bit/state", type="DirectoryOrCreate"
+                        ),
+                    ),
                 ],
             ),
         ),

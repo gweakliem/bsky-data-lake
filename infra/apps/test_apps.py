@@ -14,6 +14,8 @@ STACK_OUTPUTS = {
     "queue_url": "https://sqs.us-west-2.amazonaws.com/123456789012/bsky-raw-files",
     "raw_table_location": "s3://test-warehouse/iceberg/bsky_raw/jetstream",
     "raw_location": "s3://test-bucket/jetstream",
+    "logging_namespace": "logging",
+    "container_log_group": "/bsky/containers",
 }
 
 
@@ -83,3 +85,32 @@ def test_ingestor_deployment():
         assert container["security_context"]["run_as_user"] == 65532
 
     return apps.ingestor.spec.apply(check)
+
+
+@pulumi.runtime.test
+def test_fluent_bit_ships_workload_logs_to_data_stack_group():
+    def check(args):
+        conf, ns = args
+        assert ns == "logging"
+        assert "Path              /var/log/containers/*_bsky_*.log" in conf
+        assert "log_group_name       /bsky/containers" in conf
+        # The data stack owns the group (and its retention).
+        assert "auto_create_group    Off" in conf
+
+    return pulumi.Output.all(apps.fluent_bit_conf, apps.fluent_bit.metadata.namespace).apply(check)
+
+
+@pulumi.runtime.test
+def test_fluent_bit_daemonset():
+    def check(spec):
+        pod = spec["template"]["spec"]
+        # Must match the platform stack's Pod Identity association.
+        assert pod["service_account_name"] == "fluent-bit"
+        assert spec["template"]["metadata"]["annotations"]["bsky/config-sha256"]
+        (container,) = pod["containers"]
+        sc = container["security_context"]
+        assert sc["read_only_root_filesystem"] and sc["capabilities"]["drop"] == ["ALL"]
+        mounts = {m["name"]: m for m in container["volume_mounts"]}
+        assert mounts["varlog"]["read_only"]
+
+    return apps.fluent_bit.spec.apply(check)

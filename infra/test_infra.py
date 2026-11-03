@@ -26,6 +26,8 @@ class Mocks(pulumi.runtime.Mocks):
         self.by_type.setdefault(args.typ, []).append(state)
         if args.typ == "aws:sns/topic:Topic":
             state["arn"] = f"arn:aws:sns:us-west-2:123456789012:{name}"
+        if args.typ == "aws:cloudwatch/logGroup:LogGroup":
+            state["arn"] = f"arn:aws:logs:us-west-2:123456789012:log-group:{name}"
         if args.typ == "aws:sqs/queue:Queue":
             state["arn"] = f"arn:aws:sqs:us-west-2:123456789012:{name}"
             state["url"] = f"https://sqs.us-west-2.amazonaws.com/123456789012/{name}"
@@ -204,6 +206,33 @@ def test_ingestor_role_for_pod_identity():
         assert arn == "arn:aws:iam::123456789012:role/bsky/bsky-ingestor"
 
     return pulumi.Output.all(infra.ingestor_role.assume_role_policy, infra.ingestor_role.arn).apply(check)
+
+
+@pulumi.runtime.test
+def test_container_logs_expire():
+    def check(args):
+        name, retention = args
+        assert name == "/bsky/containers"
+        assert retention == 14
+
+    return pulumi.Output.all(infra.container_logs.name, infra.container_logs.retention_in_days).apply(check)
+
+
+@pulumi.runtime.test
+def test_fluent_bit_writes_only_container_logs():
+    def check(args):
+        policy, trust, arn = args
+        (stmt,) = json.loads(policy)["Statement"]
+        assert stmt["Resource"] == "arn:aws:logs:us-west-2:123456789012:log-group:/bsky/containers:*"
+        # The group is managed here, so the shipper can't create (or recreate) it.
+        assert "logs:CreateLogGroup" not in stmt["Action"]
+        (trust_stmt,) = json.loads(trust)["Statement"]
+        assert trust_stmt["Principal"] == {"Service": "pods.eks.amazonaws.com"}
+        assert arn == "arn:aws:iam::123456789012:role/bsky/bsky-fluent-bit"
+
+    return pulumi.Output.all(
+        infra.fluent_bit_policy_document, infra.fluent_bit_role.assume_role_policy, infra.fluent_bit_role.arn
+    ).apply(check)
 
 
 

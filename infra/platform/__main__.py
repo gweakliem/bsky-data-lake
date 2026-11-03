@@ -24,6 +24,7 @@ load_dotenv(find_dotenv(usecwd=True))
 config = pulumi.Config()
 cluster_name = config.get("clusterName") or "bsky"
 namespace = config.get("namespace") or "bsky"
+logging_namespace = config.get("loggingNamespace") or "logging"
 # Who may reach the public API endpoint. Kept out of the committed stack config
 # because it's the admin's own address.
 public_access_cidrs = config.get_object("publicAccessCidrs") or [
@@ -249,6 +250,14 @@ pod_identities = {
         service_account="ingestor",
         role_arn=data.require_output("ingestor_role_arn"),
     ),
+    # Cluster-wide log shipping, so it lives outside the workloads' namespace.
+    "fluent-bit": aws.eks.PodIdentityAssociation(
+        "fluent-bit",
+        cluster_name=cluster.name,
+        namespace=logging_namespace,
+        service_account="fluent-bit",
+        role_arn=data.require_output("fluent_bit_role_arn"),
+    ),
 }
 
 
@@ -275,6 +284,7 @@ def _kubeconfig(args: list[str]) -> str:
 
 pulumi.export("cluster_name", cluster.name)
 pulumi.export("namespace", namespace)
+pulumi.export("logging_namespace", logging_namespace)
 # Credentials come from `aws eks get-token` under the caller's AWS_PROFILE; no secrets in here.
 pulumi.export(
     "kubeconfig",

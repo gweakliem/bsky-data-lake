@@ -40,6 +40,8 @@ alert_email = config.get("alertEmail") or os.environ.get("BSKY_ALERT_EMAIL")
 if not alert_email:
     raise ValueError("set BSKY_ALERT_EMAIL in .env or `pulumi config set alertEmail <address>`")
 budget_monthly_usd = config.get("budgetMonthlyUsd") or "250"
+container_log_group = config.get("containerLogGroup") or "/bsky/containers"
+container_log_retention_days = config.get_int("containerLogRetentionDays") or 14
 
 account_id = aws.get_caller_identity_output().account_id
 region = aws.get_region_output().region
@@ -266,6 +268,34 @@ table_optimizer_policy_document = pulumi.Output.all(account_id, region).apply(
 )
 
 
+# --- Container logs: Fluent Bit on the cluster ships pod logs here ---
+
+# Created here, not by Fluent Bit, so it gets a retention period and the shipper
+# needs no logs:CreateLogGroup.
+container_logs = aws.cloudwatch.LogGroup(
+    "containers",
+    name=container_log_group,
+    retention_in_days=container_log_retention_days,
+)
+
+fluent_bit_policy_document = container_logs.arn.apply(
+    lambda arn: json.dumps(
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Sid": "WriteContainerLogs",
+                    "Effect": "Allow",
+                    "Action": ["logs:CreateLogStream", "logs:PutLogEvents", "logs:DescribeLogStreams"],
+                    # The group ARN ends in ":*", which also covers its streams.
+                    "Resource": arn if arn.endswith(":*") else f"{arn}:*",
+                }
+            ],
+        }
+    )
+)
+
+
 def _pod_role(resource_name: str, name: str, description: str) -> aws.iam.Role:
     """A role assumed through EKS Pod Identity. The association to a service
     account lives in the platform stack."""
@@ -313,6 +343,16 @@ if manage_iam:
     ingestor_role = _pod_role("ingestor", "bsky-ingestor", "EKS pod role for the Jetstream ingestor")
     aws.iam.RolePolicyAttachment("ingestor", role=ingestor_role.name, policy_arn=ingestor_policy.arn)
     pulumi.export("ingestor_role_arn", ingestor_role.arn)
+
+    fluent_bit_policy = bsky_iam.policy(
+        "fluent-bit",
+        name="bsky-fluent-bit",
+        description="Ship container logs to the bsky container log group",
+        policy=fluent_bit_policy_document,
+    )
+    fluent_bit_role = _pod_role("fluent-bit", "bsky-fluent-bit", "EKS pod role for the Fluent Bit log shipper")
+    aws.iam.RolePolicyAttachment("fluent-bit", role=fluent_bit_role.name, policy_arn=fluent_bit_policy.arn)
+    pulumi.export("fluent_bit_role_arn", fluent_bit_role.arn)
 
     # --- Glue table optimizers: compaction, snapshot retention, orphan files ---
     # Maintenance runs in the catalog rather than the pipeline, so moving to
@@ -485,9 +525,11 @@ budget = aws.budgets.Budget(
 pulumi.export("queue_url", queue.url)
 pulumi.export("dead_letter_queue_url", dlq.url)
 pulumi.export("alerts_topic_arn", alerts.arn)
+pulumi.export("container_log_group", container_logs.name)
 pulumi.export("glue_database", database.name)
 pulumi.export("raw_location", f"s3://{bucket}/{raw_prefix.rstrip('/')}")
 pulumi.export("raw_table_location", f"{warehouse}/{glue_database}/jetstream")
 pulumi.export("loader_policy_document", loader_policy_document)
 pulumi.export("ingestor_policy_document", ingestor_policy_document)
 pulumi.export("table_optimizer_policy_document", table_optimizer_policy_document)
+pulumi.export("fluent_bit_policy_document", fluent_bit_policy_document)

@@ -208,11 +208,19 @@ D4 is split so the loader, which recovers easily, is the first workload deployed
 
 ## WP D6: observability, alarms and cost controls
 
-**Status: alarms and budget done (2026-11-02)**, in the data stack: SNS topic `bsky-alerts` with an email subscription, alarms `bsky-ingest-stalled`, `bsky-loader-behind` and `bsky-dead-letters`, and the account-wide budget `bsky-monthly` ($250). Container logs in CloudWatch and job-failure alarms are still open; the latter come with D5's jobs. Raw files expire after 7 days (`rawRetentionDays`). That also bounds how far back a replay can reach.
+**Status: alarms and budget done (2026-11-02)**, in the data stack: SNS topic `bsky-alerts` with an email subscription, alarms `bsky-ingest-stalled`, `bsky-loader-behind` and `bsky-dead-letters`, and the account-wide budget `bsky-monthly` ($250). Job-failure alarms are still open: they come with silver's Kubernetes Jobs (D5's maintenance became Glue optimizers, whose run history shows failures). Raw files expire after 7 days (`rawRetentionDays`). That also bounds how far back a replay can reach.
 - **Tested 2026-11-02:** scaling the loader to 0 fired `bsky-loader-behind` after 26 min, and it cleared 8 min after scaling back. Scaling the ingestor to 0 fired `bsky-ingest-stalled` after 19 min, and it cleared 4 min after scaling back; the ingestor resumed from its last file and replayed the gap. A stale `s3:TestEvent` in the DLQ fired `bsky-dead-letters`. Every email arrived.
 
 - **Depends on:** D4 (expand as D5 adds jobs).
-- **Logs:** container logs to CloudWatch (the EKS CloudWatch Observability add-on, or Fluent Bit), with 14–30 day retention.
+- **Logs (done 2026-11-02):** a Fluent Bit DaemonSet (apps stack, `logging` namespace) ships the `bsky` namespace's container logs to the log group `/bsky/containers` (data stack, 14 days), one stream per `<pod>.<container>`. Chosen over the CloudWatch Observability add-on, which would add an operator, agents and auto-instrumentation to a one-node cluster; only Fluent Bit's `[OUTPUT]` is AWS-specific. Logs Insights, for example commit-conflict retries:
+
+  ```
+  fields @timestamp, @logStream, @message
+  | filter @message like /commit conflict/
+  | sort @timestamp desc
+  ```
+
+  The conflict retry was exercised once in production (2026-11-02 18:41Z): one retry after 5 s, then a normal append.
 - **Alarms (CloudWatch, in the data or platform project), sent to an SNS topic with an email subscription (address in stack config):**
 
   | Alarm | Signal | Meaning |

@@ -11,6 +11,7 @@ import pulumi
 ACCOUNT = "123456789012"
 LOADER_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/bsky/bsky-iceberg-loader"
 INGESTOR_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/bsky/bsky-ingestor"
+FLUENT_BIT_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/bsky/bsky-fluent-bit"
 BOUNDARY_ARN = f"arn:aws:iam::{ACCOUNT}:policy/bsky-workload-boundary"
 
 
@@ -23,7 +24,13 @@ class Mocks(pulumi.runtime.Mocks):
         state = dict(args.inputs)
         name = args.inputs.get("name", args.name)
         if args.typ == "pulumi:pulumi:StackReference":
-            return f"{args.name}-id", {"outputs": {"loader_role_arn": LOADER_ROLE_ARN, "ingestor_role_arn": INGESTOR_ROLE_ARN}}
+            return f"{args.name}-id", {
+                "outputs": {
+                    "loader_role_arn": LOADER_ROLE_ARN,
+                    "ingestor_role_arn": INGESTOR_ROLE_ARN,
+                    "fluent_bit_role_arn": FLUENT_BIT_ROLE_ARN,
+                }
+            }
         self.resources[args.typ].append(state)
         if args.typ == "aws:iam/role:Role":
             state["arn"] = f"arn:aws:iam::{ACCOUNT}:role{args.inputs.get('path', '/')}{name}"
@@ -136,6 +143,17 @@ def test_ingestor_pod_identity_uses_data_stack_role():
         assert role_arn == INGESTOR_ROLE_ARN
 
     a = platform.pod_identities["ingestor"]
+    return pulumi.Output.all(a.namespace, a.service_account, a.role_arn).apply(check)
+
+
+@pulumi.runtime.test
+def test_fluent_bit_pod_identity_uses_data_stack_role():
+    def check(args):
+        namespace, service_account, role_arn = args
+        assert (namespace, service_account) == ("logging", "fluent-bit")
+        assert role_arn == FLUENT_BIT_ROLE_ARN
+
+    a = platform.pod_identities["fluent-bit"]
     return pulumi.Output.all(a.namespace, a.service_account, a.role_arn).apply(check)
 
 

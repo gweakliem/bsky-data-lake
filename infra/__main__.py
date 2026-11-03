@@ -26,6 +26,7 @@ if not warehouse_bucket:
     raise ValueError("set BSKY_WAREHOUSE_BUCKET in .env or `pulumi config set warehouseBucket <name>`")
 raw_prefix = (config.get("rawPrefix") or os.environ.get("BSKY_PREFIX") or "jetstream").strip("/") + "/"
 glue_database = config.get("glueDatabase") or "bsky_raw"
+silver_database_name = config.get("silverGlueDatabase") or "bsky_silver"
 # Must exceed the loader's batch window plus the time to load a batch.
 visibility_timeout = config.get_int("visibilityTimeout") or 600
 max_receive_count = config.get_int("maxReceiveCount") or 5
@@ -141,6 +142,14 @@ database = aws.glue.CatalogDatabase(
     name=glue_database,
     description="Raw (bronze) layer of the Bluesky data lake",
     location_uri=f"{warehouse}/{glue_database}",
+)
+
+# The silver job creates its own tables here (see silver/).
+silver_database = aws.glue.CatalogDatabase(
+    "silver",
+    name=silver_database_name,
+    description="Silver layer of the Bluesky data lake: one table per record type",
+    location_uri=f"{warehouse}/{silver_database_name}",
 )
 
 # --- IAM: permissions the loader (and its Sail server) need ---
@@ -527,6 +536,8 @@ pulumi.export("dead_letter_queue_url", dlq.url)
 pulumi.export("alerts_topic_arn", alerts.arn)
 pulumi.export("container_log_group", container_logs.name)
 pulumi.export("glue_database", database.name)
+pulumi.export("silver_glue_database", silver_database.name)
+pulumi.export("silver_location", f"{warehouse}/{silver_database_name}")
 pulumi.export("raw_location", f"s3://{bucket}/{raw_prefix.rstrip('/')}")
 pulumi.export("raw_table_location", f"{warehouse}/{glue_database}/jetstream")
 pulumi.export("loader_policy_document", loader_policy_document)

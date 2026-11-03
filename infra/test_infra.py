@@ -106,6 +106,16 @@ def test_glue_database_location():
 
 
 @pulumi.runtime.test
+def test_silver_database_location():
+    def check(args):
+        name, uri = args
+        assert name == "bsky_silver"
+        assert uri == "s3://test-warehouse/iceberg/bsky_silver"
+
+    return pulumi.Output.all(infra.silver_database.name, infra.silver_database.location_uri).apply(check)
+
+
+@pulumi.runtime.test
 def test_loader_policy_scopes():
     def check(policy):
         stmts = {s["Sid"]: s for s in json.loads(policy)["Statement"]}

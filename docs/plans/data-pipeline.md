@@ -88,6 +88,10 @@ Prerequisite for unattended running and for D4.
 
 ## WP S2: silver job
 
+**Status: done (2026-11-02).** `silver/` (see its CLAUDE.md); 215 tests over the S1 fixtures; the `bsky_silver` Glue database is in the data stack. Additions from S1: `app.bsky.embed.gallery` alts, an `event_id` column on every table for dedup, `operation` on profiles, and `seq` on identities and accounts.
+- **Against AWS (from a laptop):** four windows, 3.0M bronze rows, every table's row count equal to its distinct `event_id`s and to the run log, no rejects. A full-rate window (1.7M rows, about an hour) took 191 s, 115 s of it the parse/staging pass, with bronze read over the internet. The remaining backlog (about 80M rows) is left for the in-cluster job in D5.
+- **Sail 0.7.3, not 0.7.2:** 0.7.2's Glue catalog sends a CreateTable request whose array element field ids collide with top-level ids, which Glue rejects (`Multiple entries with same key`); the in-memory catalog the tests use doesn't check. 0.7.3 fixes it. The loader stays on 0.7.2 (no array columns).
+
 - **Depends on:** S1.
 - **Goal:** `silver/` uv project with entry point `bsky-silver`. One run processes new bronze rows into all silver tables in one pass.
 - **Event shapes (Jetstream):**
@@ -115,7 +119,7 @@ Prerequisite for unattended running and for D4.
   - Malformed records go to a `rejects` table (raw payload + reason). Never drop them silently, and never fail the run on them.
   - Unknown collections are ignored, but counted in the run log.
   - One Iceberg commit per output table per run.
-- **Decide:** whether Sail supports `MERGE INTO` on Iceberg. If it does, it can still wait. Append + dedupe views is the baseline, because it keeps runs idempotent and cheap.
+- **Decided (2026-11-02):** Sail 0.7.2 supports `MERGE INTO` (and `DELETE FROM`) on Iceberg. It isn't used: runs append rows whose `event_id` isn't already in the batch's days and `time_us` range, which keeps them idempotent with a bounded scan.
 - **Acceptance:**
   - `uv run pytest` runs the job over the S1 fixtures on Sail's in-memory catalog, with `file://` locations as in `iceberg-loader/tests`, and checks:
     - row counts per table;

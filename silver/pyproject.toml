@@ -1,0 +1,32 @@
+[project]
+name = "bsky-silver"
+version = "0.1.0"
+description = "Process bronze Bluesky Jetstream events into silver Iceberg tables"
+authors = [
+    { name = "Gordon Weakliem", email = "gordon.weakliem@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "boto3>=1.43.117",
+    "pandas<3",
+    "pyarrow>=26.0.0",
+    "pysail==0.7.3",
+    "pyspark-client==4.2.0",
+    "python-dotenv>=1.2.4",
+]
+
+[project.scripts]
+bsky-silver = "bsky_silver:main"
+
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::FutureWarning"]

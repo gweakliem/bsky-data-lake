@@ -257,6 +257,13 @@ pod_identities = {
         service_account="silver",
         role_arn=data.require_output("silver_role_arn"),
     ),
+    "reports": aws.eks.PodIdentityAssociation(
+        "reports",
+        cluster_name=cluster.name,
+        namespace=namespace,
+        service_account="reports",
+        role_arn=data.require_output("reports_role_arn"),
+    ),
     # Cluster-wide log shipping, so it lives outside the workloads' namespace.
     "fluent-bit": aws.eks.PodIdentityAssociation(
         "fluent-bit",

@@ -254,6 +254,7 @@ def test_table_optimizer_policy_scopes():
         assert stmts["RewriteTableFiles"]["Resource"] == "arn:aws:s3:::test-warehouse/iceberg/*"
         assert stmts["ListTableFiles"]["Condition"] == {"StringLike": {"s3:prefix": ["iceberg/*"]}}
         assert "arn:aws:glue:us-west-2:123456789012:table/bsky_raw/*" in stmts["CommitToCatalog"]["Resource"]
+        assert "arn:aws:glue:us-west-2:123456789012:table/bsky_silver/*" in stmts["CommitToCatalog"]["Resource"]
         assert all("/aws-glue/iceberg-" in r for r in stmts["WriteOptimizerLogs"]["Resource"])
 
     return infra.table_optimizer_policy_document.apply(check)
@@ -265,10 +266,11 @@ def test_table_optimizers_for_raw_table():
         trust, role_arn = args
         (stmt,) = json.loads(trust)["Statement"]
         assert stmt["Principal"] == {"Service": "glue.amazonaws.com"}
-        by_type = {o["type"]: o for o in mocks.optimizers}
+        bronze = [o for o in mocks.optimizers if o["databaseName"] == "bsky_raw"]
+        by_type = {o["type"]: o for o in bronze}
         assert sorted(by_type) == ["compaction", "orphan_file_deletion", "retention"]
         for o in by_type.values():
-            assert (o["databaseName"], o["tableName"]) == ("bsky_raw", "jetstream")
+            assert o["tableName"] == "jetstream"
             assert o["configuration"]["roleArn"] == role_arn
             assert o["configuration"]["enabled"] is True
         compaction = by_type["compaction"]["configuration"]["compactionConfiguration"]["icebergConfiguration"]
@@ -280,6 +282,15 @@ def test_table_optimizers_for_raw_table():
     role = infra.optimizer_role
     return pulumi.Output.all(role.assume_role_policy, role.arn).apply(check)
 
+
+
+def test_table_optimizers_for_silver_tables():
+    silver = [o for o in mocks.optimizers if o["databaseName"] == "bsky_silver"]
+    tables = {o["tableName"] for o in silver}
+    assert {"posts", "likes", "rejects", "silver_runs"} <= tables
+    assert len(tables) == 11
+    # Every table gets all three optimizers.
+    assert len(silver) == 3 * len(tables)
 
 
 def test_raw_files_expire_after_a_week():
@@ -357,3 +368,20 @@ def test_athena_workgroup_writes_to_its_own_bucket():
         assert conf["engineVersion"]["selectedEngineVersion"] == "Athena engine version 3"
 
     return infra.athena_results.bucket.apply(check)
+
+
+@pulumi.runtime.test
+def test_reports_read_only_silver():
+    def check(args):
+        policy, arn = args
+        stmts = {s["Sid"]: s for s in json.loads(policy)["Statement"]}
+        assert stmts["ReadSilver"]["Action"] == "s3:GetObject"
+        assert stmts["ReadSilver"]["Resource"] == "arn:aws:s3:::test-warehouse/iceberg/bsky_silver/*"
+        assert "glue:GetCatalog" in stmts["ReadSilverCatalog"]["Action"]
+        # Read-only, and nothing outside silver.
+        actions = [a for s in stmts.values() for a in ([s["Action"]] if isinstance(s["Action"], str) else s["Action"])]
+        assert all(a.split(":")[1].startswith(("Get", "List")) for a in actions)
+        assert "bsky_raw" not in policy and "test-bucket" not in policy
+        assert arn == "arn:aws:iam::123456789012:role/bsky/bsky-reports"
+
+    return pulumi.Output.all(infra.reports_policy_document, infra.reports_role.arn).apply(check)

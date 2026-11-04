@@ -139,3 +139,13 @@ def test_silver_cronjob():
         assert not any(k.startswith("AWS_ACCESS") or k.startswith("AWS_SECRET") for k in env)
 
     return apps.silver.spec.apply(check)
+
+
+@pulumi.runtime.test
+def test_reports_service_account():
+    def check(args):
+        name, namespace = args
+        # Must match the platform stack's Pod Identity association.
+        assert (name, namespace) == ("reports", "bsky")
+
+    return pulumi.Output.all(apps.reports_sa.metadata.name, apps.reports_sa.metadata.namespace).apply(check)

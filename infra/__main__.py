@@ -35,6 +35,11 @@ manage_iam = config.get_bool("manageIam", True)
 # Iceberg tables in the raw database that Glue's table optimizers maintain.
 # The loader creates the tables, so add one here only once it exists.
 optimized_tables = config.get_object("optimizedTables") or ["jetstream"]
+# Likewise in the silver database: silver's TABLES plus its run log (silver/tables.py).
+optimized_silver_tables = config.get_object("optimizedSilverTables") or [
+    "posts", "likes", "reposts", "follows", "blocks", "profiles",
+    "identities", "accounts", "deletes", "rejects", "silver_runs",
+]
 # Raw files are a replay source once loaded, so they expire.
 raw_retention_days = config.get_int("rawRetentionDays") or 7
 # Where alarms and budget alerts go. Kept out of committed config: it's personal.
@@ -312,6 +317,8 @@ table_optimizer_policy_document = pulumi.Output.all(account_id, region).apply(
                         f"arn:aws:glue:{args[1]}:{args[0]}:catalog",
                         f"arn:aws:glue:{args[1]}:{args[0]}:database/{glue_database}",
                         f"arn:aws:glue:{args[1]}:{args[0]}:table/{glue_database}/*",
+                        f"arn:aws:glue:{args[1]}:{args[0]}:database/{silver_database_name}",
+                        f"arn:aws:glue:{args[1]}:{args[0]}:table/{silver_database_name}/*",
                     ],
                 },
                 {
@@ -369,6 +376,43 @@ silver_policy_document = pulumi.Output.all(account_id, region).apply(
                     "Sid": "WriteSilverCatalog",
                     "Effect": "Allow",
                     "Action": ["glue:GetDatabase", "glue:GetTable", "glue:GetTables", "glue:CreateTable", "glue:UpdateTable"],
+                    "Resource": [
+                        f"arn:aws:glue:{args[1]}:{args[0]}:catalog",
+                        f"arn:aws:glue:{args[1]}:{args[0]}:database/{silver_database_name}",
+                        f"arn:aws:glue:{args[1]}:{args[0]}:table/{silver_database_name}/*",
+                    ],
+                },
+            ],
+        }
+    )
+)
+
+# --- IAM: the report build reads the silver tables, nothing else ---
+# Through Glue's Iceberg REST endpoint (DuckDB attaches the catalog with it),
+# which also needs glue:GetCatalog.
+
+reports_policy_document = pulumi.Output.all(account_id, region).apply(
+    lambda args: json.dumps(
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Sid": "ListSilverFiles",
+                    "Effect": "Allow",
+                    "Action": "s3:ListBucket",
+                    "Resource": warehouse_bucket_arn,
+                    "Condition": {"StringLike": {"s3:prefix": [f"iceberg/{silver_database_name}/*"]}},
+                },
+                {
+                    "Sid": "ReadSilver",
+                    "Effect": "Allow",
+                    "Action": "s3:GetObject",
+                    "Resource": f"{warehouse_bucket_arn}/iceberg/{silver_database_name}/*",
+                },
+                {
+                    "Sid": "ReadSilverCatalog",
+                    "Effect": "Allow",
+                    "Action": ["glue:GetCatalog", "glue:GetDatabase", "glue:GetDatabases", "glue:GetTable", "glue:GetTables"],
                     "Resource": [
                         f"arn:aws:glue:{args[1]}:{args[0]}:catalog",
                         f"arn:aws:glue:{args[1]}:{args[0]}:database/{silver_database_name}",
@@ -476,6 +520,16 @@ if manage_iam:
     aws.iam.RolePolicyAttachment("silver", role=silver_role.name, policy_arn=silver_policy.arn)
     pulumi.export("silver_role_arn", silver_role.arn)
 
+    reports_policy = bsky_iam.policy(
+        "reports",
+        name="bsky-reports",
+        description="Read the silver Iceberg tables for the report build",
+        policy=reports_policy_document,
+    )
+    reports_role = _pod_role("reports", "bsky-reports", "EKS pod role for the report build")
+    aws.iam.RolePolicyAttachment("reports", role=reports_role.name, policy_arn=reports_policy.arn)
+    pulumi.export("reports_role_arn", reports_role.arn)
+
     # --- Glue table optimizers: compaction, snapshot retention, orphan files ---
     # Maintenance runs in the catalog rather than the pipeline, so moving to
     # another catalog (R2 Data Catalog, BigLake, ...) swaps it with the catalog.
@@ -550,17 +604,22 @@ if manage_iam:
             ),
         }
 
+    # Bronze's resource names predate silver and stay unprefixed.
     table_optimizers = {
-        (table, kind): aws.glue.CatalogTableOptimizer(
-            f"{table}-{kind.replace('_', '-')}",
+        (db.name, table, kind): aws.glue.CatalogTableOptimizer(
+            f"{prefix}{table}-{kind.replace('_', '-')}",
             catalog_id=account_id,
-            database_name=database.name,
+            database_name=db.name,
             table_name=table,
             type=kind,
             configuration=configuration,
             opts=pulumi.ResourceOptions(depends_on=[optimizer_attachment, *optimizer_log_groups.values()]),
         )
-        for table in optimized_tables
+        for db, prefix, tables in [
+            (database, "", optimized_tables),
+            (silver_database, "silver-", optimized_silver_tables),
+        ]
+        for table in tables
         for kind, configuration in _optimizer_configs(optimizer_role.arn).items()
     }
 
@@ -660,3 +719,4 @@ pulumi.export("ingestor_policy_document", ingestor_policy_document)
 pulumi.export("table_optimizer_policy_document", table_optimizer_policy_document)
 pulumi.export("fluent_bit_policy_document", fluent_bit_policy_document)
 pulumi.export("silver_policy_document", silver_policy_document)
+pulumi.export("reports_policy_document", reports_policy_document)

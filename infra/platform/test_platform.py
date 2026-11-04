@@ -13,6 +13,7 @@ LOADER_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/bsky/bsky-iceberg-loader"
 INGESTOR_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/bsky/bsky-ingestor"
 FLUENT_BIT_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/bsky/bsky-fluent-bit"
 SILVER_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/bsky/bsky-silver"
+REPORTS_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/bsky/bsky-reports"
 BOUNDARY_ARN = f"arn:aws:iam::{ACCOUNT}:policy/bsky-workload-boundary"
 
 
@@ -31,6 +32,7 @@ class Mocks(pulumi.runtime.Mocks):
                     "ingestor_role_arn": INGESTOR_ROLE_ARN,
                     "fluent_bit_role_arn": FLUENT_BIT_ROLE_ARN,
                     "silver_role_arn": SILVER_ROLE_ARN,
+                    "reports_role_arn": REPORTS_ROLE_ARN,
                 }
             }
         self.resources[args.typ].append(state)
@@ -191,4 +193,15 @@ def test_silver_pod_identity_uses_data_stack_role():
         assert role_arn == SILVER_ROLE_ARN
 
     a = platform.pod_identities["silver"]
+    return pulumi.Output.all(a.namespace, a.service_account, a.role_arn).apply(check)
+
+
+@pulumi.runtime.test
+def test_reports_pod_identity_uses_data_stack_role():
+    def check(args):
+        namespace, service_account, role_arn = args
+        assert (namespace, service_account) == ("bsky", "reports")
+        assert role_arn == REPORTS_ROLE_ARN
+
+    a = platform.pod_identities["reports"]
     return pulumi.Output.all(a.namespace, a.service_account, a.role_arn).apply(check)

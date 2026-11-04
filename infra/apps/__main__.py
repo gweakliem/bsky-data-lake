@@ -177,6 +177,13 @@ silver_sa = k8s.core.v1.ServiceAccount(
     opts=opts,
 )
 
+# The report build's identity (bsky-reports via Pod Identity); its CronJob comes with R3.
+reports_sa = k8s.core.v1.ServiceAccount(
+    "reports",
+    metadata=k8s.meta.v1.ObjectMetaArgs(name="reports", namespace=ns),
+    opts=opts,
+)
+
 silver_image = repository_urls.apply(lambda urls: f"{urls['silver']}:{silver_image_tag}")
 
 silver = k8s.batch.v1.CronJob(

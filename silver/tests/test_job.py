@@ -2,6 +2,8 @@ import datetime as dt
 import json
 from collections import Counter
 
+import pytest
+
 from conftest import add_bronze, fixtures, utc
 
 from bsky_silver.job import BACKFILL, RUNS, SilverJob
@@ -239,3 +241,52 @@ def test_backfill_rerun_of_a_window_is_idempotent(job):
 
     assert edge_set(job) == before
     assert job.spark.table(job.table(EDGES)).count() == count
+
+
+CONFLICT = "conflict: Cannot commit catalog-managed table 't' because base metadata location ... does not match"
+
+
+def test_commit_conflicts_are_retried_with_backoff(job):
+    add_bronze(job, payloads(), INGESTED)
+    sleeps = []
+    job.sleep = sleeps.append
+    append_new = job._append_new
+    attempts = Counter()
+
+    # Glue's compactor commits to likes twice while the run appends to it.
+    def conflicting(name, rows):
+        attempts[name] += 1
+        if name == "likes" and attempts[name] < 3:
+            raise RuntimeError(CONFLICT)
+        return append_new(name, rows)
+
+    job._append_new = conflicting
+    job.run(NOW)
+    assert sleeps == [5, 15]
+    # Every row once, though likes was attempted three times.
+    assert table_counts(job) == expected_counts(payloads())
+    assert job.spark.table(job.table(RUNS)).count() == 1
+
+
+def test_conflict_retries_run_out_and_other_errors_are_not_retried(job):
+    add_bronze(job, payloads(), INGESTED)
+    sleeps = []
+    job.sleep = sleeps.append
+
+    def failing(message):
+        def append(name, rows):
+            raise RuntimeError(message)
+        return append
+
+    job._append_new = failing("conflict: still stale")
+    with pytest.raises(RuntimeError, match="still stale"):
+        job.run(NOW)
+    assert sleeps == [5, 15, 45]
+
+    sleeps.clear()
+    job._append_new = failing("access denied")
+    with pytest.raises(RuntimeError, match="access denied"):
+        job.run(NOW)
+    assert sleeps == []
+    # Nothing was recorded, so the window is still pending.
+    assert job.spark.table(job.table(RUNS)).count() == 0

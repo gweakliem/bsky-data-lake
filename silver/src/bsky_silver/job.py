@@ -21,7 +21,7 @@ import shutil
 import time
 import uuid
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from functools import reduce
 from pathlib import Path
 
@@ -47,6 +47,12 @@ def _utc(value: dt.datetime | None) -> dt.datetime | None:
     """collect() returns naive datetimes in the Python process's local time zone
     (not the session's), and astimezone reads a naive value as local."""
     return value.astimezone(dt.timezone.utc) if value is not None else None
+
+
+def is_commit_conflict(e: Exception) -> bool:
+    """Whether a commit failed because another writer committed first."""
+    # Sail reports it as e.g. "conflict: Cannot commit catalog-managed table ..."
+    return "conflict:" in str(e) or "CommitFailedException" in str(e)
 
 
 def normalize_batches(batches: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
@@ -111,6 +117,8 @@ class SilverJob:
         staging_dir: str | Path,
         max_rows: int = 500_000,
         settle: dt.timedelta = dt.timedelta(minutes=5),
+        conflict_retry_delays: tuple[float, ...] = (5, 15, 45),
+        sleep: Callable[[float], None] = time.sleep,
     ):
         self.spark = spark
         self.bronze_table = bronze_table
@@ -119,6 +127,8 @@ class SilverJob:
         self.staging_dir = Path(staging_dir)
         self.max_rows = max_rows
         self.settle = settle
+        self.conflict_retry_delays = conflict_retry_delays
+        self.sleep = sleep
         spark.conf.set("spark.sql.session.timeZone", "UTC")
 
     def table(self, name: str) -> str:
@@ -221,7 +231,26 @@ class SilverJob:
         )
         return counts
 
+    def _committing(self, what: str, commit: Callable[[], int | None]) -> int | None:
+        """Run a commit, retrying when another writer committed to the table first.
+
+        That writer is Glue's compactor, which rewrites files without changing
+        rows. A retried append redoes its anti-join against the new snapshot,
+        so retrying is safe.
+        """
+        for attempt, delay in enumerate([*self.conflict_retry_delays, None], start=1):
+            try:
+                return commit()
+            except Exception as e:
+                if delay is None or not is_commit_conflict(e):
+                    raise
+                log.warning("commit conflict on %s, attempt %d; retrying in %g s", what, attempt, delay)
+                self.sleep(delay)
+
     def _append(self, name: str, rows: DataFrame) -> int:
+        return self._committing(name, lambda: self._append_new(name, rows))
+
+    def _append_new(self, name: str, rows: DataFrame) -> int:
         """Append rows not already in the table, deduplicated on event_id.
 
         Duplicates come from the ingestor's restart overlap (a replayed event
@@ -285,7 +314,9 @@ class SilverJob:
                 "edges": count,
                 "finished_at": dt.datetime.now(dt.timezone.utc),
             }
-            self.spark.createDataFrame([row], BACKFILL_DDL).writeTo(self.table(BACKFILL)).append()
+            self._committing(
+                BACKFILL, lambda: self.spark.createDataFrame([row], BACKFILL_DDL).writeTo(self.table(BACKFILL)).append()
+            )
             log.info("backfill: bronze (%s, %s], %d edge(s), in %.1f s", after, through, count, time.monotonic() - t0)
         return len(pending)
 
@@ -299,5 +330,5 @@ class SilverJob:
             "bronze_rows": bronze_rows,
             "counts": json.dumps(counts, sort_keys=True),
         }
-        self.spark.createDataFrame([row], RUNS_DDL).writeTo(self.table(RUNS)).append()
+        self._committing(RUNS, lambda: self.spark.createDataFrame([row], RUNS_DDL).writeTo(self.table(RUNS)).append())
 

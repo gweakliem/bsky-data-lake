@@ -55,6 +55,23 @@ def is_commit_conflict(e: Exception) -> bool:
     return "conflict:" in str(e) or "CommitFailedException" in str(e)
 
 
+def group_commits(commits: list[tuple[dt.datetime, int]], max_rows: int) -> list[list[tuple[dt.datetime, int]]]:
+    """Consecutive (ingested_at, rows) loader commits, in groups of at most max_rows.
+
+    A commit isn't split, so a group always has at least one commit, even
+    one larger than max_rows.
+    """
+    groups, rows = [], 0
+    for commit in commits:
+        if groups and rows + commit[1] <= max_rows:
+            groups[-1].append(commit)
+            rows += commit[1]
+        else:
+            groups.append([commit])
+            rows = commit[1]
+    return groups
+
+
 def normalize_batches(batches: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
     """mapInArrow body: bronze (payload, received_at, ingested_at, day) to STAGE_SCHEMA."""
     names = STAGE_SCHEMA.names
@@ -168,12 +185,8 @@ class SilverJob:
         commits = bronze.groupBy("ingested_at").count().orderBy("ingested_at").collect()
         if not commits:
             return None
-        through, rows = None, 0
-        for commit in commits:
-            if through is not None and rows + commit["count"] > self.max_rows:
-                break
-            through, rows = commit.ingested_at, rows + commit["count"]
-        return after, _utc(through)
+        first = group_commits([(c.ingested_at, c["count"]) for c in commits], self.max_rows)[0]
+        return after, _utc(first[-1][0])
 
     def run(self, now: dt.datetime | None = None) -> dict | None:
         """Process one window. Returns the run's counts, or None when caught up."""
@@ -286,10 +299,12 @@ class SilverJob:
         Those runs have no post_edges count. Each window's posts, likes and
         reposts are read back from the silver tables by bronze_ingested_at
         (file statistics prune that well: each run writes its own files) and
-        appended like a run's edges, so a window is the same memory as a run's
-        edge step. A finished window is recorded in post_edges_backfill; one
-        interrupted before that is redone, and the anti-join drops what it had
-        already appended. Returns the number of windows processed.
+        appended like a run's edges. Early manual runs had windows of over a
+        million rows, more than the pod's memory allows, so a window is
+        appended in parts of at most max_rows source rows, by loader commit.
+        A finished window is recorded in post_edges_backfill; one interrupted
+        before that is redone, and the anti-join drops what it had already
+        appended. Returns the number of windows processed.
         """
         done = {_utc(r.bronze_through) for r in self.spark.table(self.table(BACKFILL)).collect()}
         pending = sorted(
@@ -303,11 +318,18 @@ class SilverJob:
             t0 = time.monotonic()
             after, through = _utc(run.bronze_after), _utc(run.bronze_through)
 
-            def window(name: str) -> DataFrame:
+            def window(name: str, after: dt.datetime | None, through: dt.datetime) -> DataFrame:
                 rows = self.spark.table(self.table(name)).where(F.col("bronze_ingested_at") <= F.lit(through))
                 return rows.where(F.col("bronze_ingested_at") > F.lit(after)) if after is not None else rows
 
-            count = self._append(EDGES, edges(window("posts"), window("likes"), window("reposts")))
+            sources = ("posts", "likes", "reposts")
+            ingested = reduce(DataFrame.unionByName, (window(t, after, through).select("bronze_ingested_at") for t in sources))
+            commits = ingested.groupBy("bronze_ingested_at").count().orderBy("bronze_ingested_at").collect()
+            count, part_after = 0, after
+            for part in group_commits([(c.bronze_ingested_at, c["count"]) for c in commits], self.max_rows):
+                part_through = _utc(part[-1][0])
+                count += self._append(EDGES, edges(*(window(t, part_after, part_through) for t in sources)))
+                part_after = part_through
             row = {
                 "bronze_after": after,
                 "bronze_through": through,

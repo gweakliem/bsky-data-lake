@@ -6,7 +6,7 @@ import pytest
 
 from conftest import add_bronze, fixtures, utc
 
-from bsky_silver.job import BACKFILL, RUNS, SilverJob
+from bsky_silver.job import BACKFILL, RUNS, SilverJob, group_commits
 from bsky_silver.normalize import IGNORED, POST, REJECTS, normalize
 from bsky_silver.tables import EDGES, SCHEMAS
 
@@ -226,6 +226,36 @@ def test_backfill_builds_edges_for_earlier_windows(job):
     job.run(NOW + dt.timedelta(minutes=10))
     assert job.backfill_edges() == 0
 
+
+def test_backfill_splits_a_large_window_by_loader_commit(job):
+    # One window of three loader commits, like the early manual runs' windows.
+    # Interleaved: the fixtures are grouped by type, and each commit needs posts, likes or reposts.
+    for i in range(3):
+        add_bronze(job, payloads()[i::3], INGESTED + dt.timedelta(minutes=i))
+    job.run(NOW)
+    assert job.spark.table(job.table(RUNS)).count() == 1
+    built = edge_set(job)
+    forget_edges(job)
+
+    # Below any commit's posts + likes + reposts, so each commit is a part of its own.
+    job.max_rows = 1
+    append_new = job._append_new
+    parts = []
+    job._append_new = lambda name, rows: parts.append(name) or append_new(name, rows)
+    assert job.backfill_edges() == 1
+    # One append per commit, never the whole window at once.
+    assert parts == [EDGES] * 3
+    assert edge_set(job) == built == expected_edges(payloads())
+
+
+def test_group_commits_never_splits_a_commit():
+    t = [utc(2026, 11, 1, 12, m) for m in range(4)]
+    assert group_commits([], 10) == []
+    assert group_commits([(t[0], 4), (t[1], 5), (t[2], 3)], 10) == [[(t[0], 4), (t[1], 5)], [(t[2], 3)]]
+    # A commit over the cap is a group of its own.
+    assert group_commits([(t[0], 25), (t[1], 3), (t[2], 30), (t[3], 1)], 10) == [
+        [(t[0], 25)], [(t[1], 3)], [(t[2], 30)], [(t[3], 1)]
+    ]
 
 def test_backfill_rerun_of_a_window_is_idempotent(job):
     add_bronze(job, payloads(), INGESTED)

@@ -227,25 +227,27 @@ def test_backfill_builds_edges_for_earlier_windows(job):
     assert job.backfill_edges() == 0
 
 
-def test_backfill_splits_a_large_window_by_loader_commit(job):
-    # One window of three loader commits, like the early manual runs' windows.
-    # Interleaved: the fixtures are grouped by type, and each commit needs posts, likes or reposts.
-    for i in range(3):
-        add_bronze(job, payloads()[i::3], INGESTED + dt.timedelta(minutes=i))
-    job.run(NOW)
-    assert job.spark.table(job.table(RUNS)).count() == 1
-    built = edge_set(job)
-    forget_edges(job)
-
-    # Below any commit's posts + likes + reposts, so each commit is a part of its own.
-    job.max_rows = 1
+def test_a_large_commit_is_appended_in_parts(job):
+    # One loader commit over the cap: the window can't be smaller, but its appends can.
+    add_bronze(job, payloads(), INGESTED)
+    job.max_rows = 20
     append_new = job._append_new
-    parts = []
-    job._append_new = lambda name, rows: parts.append(name) or append_new(name, rows)
+    appends = []
+    job._append_new = lambda name, rows: appends.append(name) or append_new(name, rows)
+    counts = job.run(NOW)
+    assert counts["appended"][EDGES] == len(expected_edges(payloads()))
+    for name in ("posts", EDGES):
+        assert appends.count(name) > 1
+    built = edge_set(job)
+    assert built == expected_edges(payloads())
+
+    # The backfill splits the same way, and a rerun of every part appends nothing.
+    forget_edges(job)
+    appends.clear()
     assert job.backfill_edges() == 1
-    # One append per commit, never the whole window at once.
-    assert parts == [EDGES] * 3
-    assert edge_set(job) == built == expected_edges(payloads())
+    assert appends.count(EDGES) > 1
+    assert edge_set(job) == built
+    assert job._append(EDGES, job.spark.table(job.table(EDGES))) == 0
 
 
 def test_group_commits_never_splits_a_commit():

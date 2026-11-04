@@ -1,7 +1,8 @@
 """Process new bronze rows into the silver tables.
 
 A run covers a window of bronze `ingested_at` after the last run's watermark,
-holding at most `max_rows` rows (memory grows with a window's rows).
+holding at most `max_rows` rows in whole loader commits; a table's append is
+split into parts of about `max_rows` rows when one commit is larger.
 It parses every row once (Python, via mapInArrow) into a staging Parquet
 directory, then appends each table's rows from there in one Iceberg commit per
 table, then `post_edges` from the same staged rows, and finally records the
@@ -261,7 +262,20 @@ class SilverJob:
                 self.sleep(delay)
 
     def _append(self, name: str, rows: DataFrame) -> int:
-        return self._committing(name, lambda: self._append_new(name, rows))
+        """Append rows not already in the table, in parts of at most about max_rows.
+
+        Memory grows with the rows in one append, and a window can't be
+        smaller than its largest loader commit (up to 1M rows in the Nov 2
+        backlog upload). Parts split on a hash of event_id, so a duplicate
+        and the row it duplicates always meet in the same part's anti-join.
+        """
+        parts = max(1, -(-rows.count() // self.max_rows))
+        appended = 0
+        for i in range(parts):
+            part = rows if parts == 1 else rows.where(F.pmod(F.hash("event_id"), F.lit(parts)) == i)
+            what = name if parts == 1 else f"{name} (part {i + 1} of {parts})"
+            appended += self._committing(what, lambda: self._append_new(name, part))
+        return appended
 
     def _append_new(self, name: str, rows: DataFrame) -> int:
         """Append rows not already in the table, deduplicated on event_id.
@@ -299,9 +313,8 @@ class SilverJob:
         Those runs have no post_edges count. Each window's posts, likes and
         reposts are read back from the silver tables by bronze_ingested_at
         (file statistics prune that well: each run writes its own files) and
-        appended like a run's edges. Early manual runs had windows of over a
-        million rows, more than the pod's memory allows, so a window is
-        appended in parts of at most max_rows source rows, by loader commit.
+        appended like a run's edges, in parts if large (early manual runs had
+        windows of up to 1.7M rows).
         A finished window is recorded in post_edges_backfill; one interrupted
         before that is redone, and the anti-join drops what it had already
         appended. Returns the number of windows processed.
@@ -318,18 +331,11 @@ class SilverJob:
             t0 = time.monotonic()
             after, through = _utc(run.bronze_after), _utc(run.bronze_through)
 
-            def window(name: str, after: dt.datetime | None, through: dt.datetime) -> DataFrame:
+            def window(name: str) -> DataFrame:
                 rows = self.spark.table(self.table(name)).where(F.col("bronze_ingested_at") <= F.lit(through))
                 return rows.where(F.col("bronze_ingested_at") > F.lit(after)) if after is not None else rows
 
-            sources = ("posts", "likes", "reposts")
-            ingested = reduce(DataFrame.unionByName, (window(t, after, through).select("bronze_ingested_at") for t in sources))
-            commits = ingested.groupBy("bronze_ingested_at").count().orderBy("bronze_ingested_at").collect()
-            count, part_after = 0, after
-            for part in group_commits([(c.bronze_ingested_at, c["count"]) for c in commits], self.max_rows):
-                part_through = _utc(part[-1][0])
-                count += self._append(EDGES, edges(*(window(t, part_after, part_through) for t in sources)))
-                part_after = part_through
+            count = self._append(EDGES, edges(*(window(t) for t in ("posts", "likes", "reposts"))))
             row = {
                 "bronze_after": after,
                 "bronze_through": through,

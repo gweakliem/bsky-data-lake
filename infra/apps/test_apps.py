@@ -127,6 +127,8 @@ def test_silver_cronjob():
         job = spec["job_template"]["spec"]
         assert job["backoff_limit"] == 2
         assert job["active_deadline_seconds"] < 3600
+        # Consolidation must not evict a run.
+        assert job["template"]["metadata"]["annotations"]["karpenter.sh/do-not-disrupt"] == "true"
         pod = job["template"]["spec"]
         # Must match the platform stack's Pod Identity association.
         assert pod["service_account_name"] == "silver"

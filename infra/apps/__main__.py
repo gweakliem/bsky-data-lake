@@ -165,8 +165,8 @@ ingestor = k8s.apps.v1.Deployment(
 
 silver_labels = {"app.kubernetes.io/name": "silver", "app.kubernetes.io/part-of": "bsky-data-lake"}
 silver_image_tag = config.require("silverImageTag")
-# Memory grows with a window's rows, about 1 GB + 2 GB per million (see
-# silver/CLAUDE.md), so the row cap and the memory limit are set together.
+# Memory grows with the rows in one append, about 1 GB + 2 GB per million (see
+# silver/CLAUDE.md); appends are split at the row cap, so the two are set together.
 silver_max_rows = config.get_int("silverMaxRows") or 500_000
 silver_memory_limit = config.get("silverMemoryLimit") or "3Gi"
 
@@ -205,7 +205,13 @@ silver = k8s.batch.v1.CronJob(
                 # Under an hour, so a stuck run can't block the next schedule.
                 active_deadline_seconds=55 * 60,
                 template=k8s.core.v1.PodTemplateSpecArgs(
-                    metadata=k8s.meta.v1.ObjectMetaArgs(labels=silver_labels),
+                    metadata=k8s.meta.v1.ObjectMetaArgs(
+                        labels=silver_labels,
+                        # Auto Mode's consolidation evicted a run mid-backfill ("Underutilized",
+                        # 2026-11-04), using up a retry. A run lasts under an hour, so it never
+                        # pins a node for long.
+                        annotations={"karpenter.sh/do-not-disrupt": "true"},
+                    ),
                     spec=k8s.core.v1.PodSpecArgs(
                         service_account_name=silver_sa.metadata.name,
                         restart_policy="Never",

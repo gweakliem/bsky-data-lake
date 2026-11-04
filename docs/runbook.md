@@ -139,7 +139,7 @@ The CronJob runs at `:05` each hour with `concurrencyPolicy: Forbid`, so a run t
 
 **Edge backfill:** once caught up, a run builds `post_edges` for windows processed before edges existed, until the deadline, and the next run continues. Until it's done, runs end `DeadlineExceeded` as during a backlog. Progress: `SELECT count(*), max(bronze_through) FROM bsky_silver.post_edges_backfill`, against the `silver_runs` windows without a `post_edges` count.
 
-**Memory:** peak is about 1 GB + 2 GB per million rows in a window, against a 3 Gi limit (`silverMemoryLimit`). An OOM kill shows as `OOMKilled` in `kubectl describe pod`, and in CloudWatch as a new log stream from the retry pod (the Job retries twice). If it happens, raise `silverMemoryLimit` in the apps stack.
+**Memory:** peak is about 1 GB + 2 GB per million rows in one append, against a 3 Gi limit (`silverMemoryLimit`). Appends over 500k rows are split into parts, so a large loader commit shouldn't push it higher. An OOM kill shows as `OOMKilled` in `kubectl describe pod`, and in CloudWatch as a new log stream from the retry pod (the Job retries twice). If it happens, raise `silverMemoryLimit` in the apps stack.
 
 **Run it now**, without waiting for `:05`:
 

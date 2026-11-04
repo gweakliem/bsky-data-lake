@@ -87,16 +87,22 @@ Changes go through Pulumi, in the order data → platform → apps.
 - **Cause:** silver commits once per window to every table, so the tables are many small files and snapshots (for example `silver_runs`: 818 S3 objects for 203 rows). DuckDB reads Iceberg metadata sequentially, and the laptop was far from the region.
 - **Fix applied (2026-11-04):** Glue table optimizers (compaction, snapshot retention of 3 days, orphan-file deletion) now cover all 11 silver tables (`optimizedSilverTables` in the data stack).
   - **Open:** whether Glue's optimizers also rewrite manifests. If they don't, the manifest count keeps growing with commits, and silver may need fewer, larger commits. R1 measures this.
-- **In the cluster** (throwaway pod): DuckDB's `credential_chain` picked up EKS Pod Identity credentials directly, with no boto3 shim. The `ATTACH` then got HTTP 403 from Glue's Iceberg REST `/iceberg/v1/config`, because the test borrowed the silver job's role, which lacks `glue:GetCatalog`. The `bsky-reports` role fixes that. In-cluster timings are still to be measured.
+- **In the cluster** (throwaway pod, 2026-11-04):
+  - DuckDB's `credential_chain` picked up EKS Pod Identity credentials directly, with no boto3 shim.
+  - A first attempt borrowed the silver job's role and got HTTP 403 from Glue's Iceberg REST `/iceberg/v1/config`: that endpoint needs `glue:GetCatalog`, which silver's role lacks. Running as `reports` (`bsky-reports`, which has it), the `ATTACH` succeeded.
+  - Timings, just after the optimizers were enabled: `silver_runs` totals **0.8 s**, posts per day **7.9 s**, both under R1's proposed 10 s threshold.
+  - Python DuckDB needs `pytz` to fetch timestamp columns; irrelevant to Evidence, which uses the Node package.
 
 ## WP R1: access and in-cluster spike
+
+**Status: access done (2026-11-04).** The role, Pod Identity association and service account below are applied, and the first in-cluster timings meet the thresholds (see [Measurements](#measurements-so-far)). Still open: the write-denial check, the `likes` query and cold/warm timings, and whether Glue rewrites manifests.
 
 - **Depends on:** nothing open (silver exists, optimizers applied).
 - **Goal:** confirm DuckDB in the cluster is fast enough to build reports, using the role reports will actually run with.
 - **Tasks:**
-  - **Data stack:** role `bsky-reports` and its policy as in [Identity](#identity), through `bsky_iam`. Add a mock test that it is read-only (no S3 writes, no Glue writes).
-  - **Platform stack:** Pod Identity association for `bsky/reports`.
-  - **Apps stack:** service account `reports` (the CronJob comes in R3).
+  - **Data stack (done):** role `bsky-reports` and its policy as in [Identity](#identity), through `bsky_iam`, with a mock test that it is read-only (no S3 writes, no Glue writes).
+  - **Platform stack (done):** Pod Identity association for `bsky/reports`.
+  - **Apps stack (done):** service account `reports` (the CronJob comes in R3).
   - **Spike:** a throwaway pod as `reports` with DuckDB 1.4 (Python or the CLI, matching the version Evidence uses). Run the two test queries (`silver_runs` totals, posts per day) plus one `likes` aggregate, cold and warm, and record:
     - wall time per query, and how much of it is `ATTACH` and metadata;
     - S3 objects per table before and after the optimizers' first runs;
@@ -105,7 +111,7 @@ Changes go through Pulumi, in the order data → platform → apps.
   - each test query under 10 s in the cluster;
   - a full build of the R2 pages under 5 minutes, so an hourly build fits comfortably in its slot.
 - **Decide:** if the thresholds are missed after compaction, which lever comes first:
-  - fewer, larger silver commits (a larger `--max-rows`, or one commit per run instead of per window);
+  - fewer, larger silver commits through a larger `--max-rows` (bounded by silver's memory). One commit per run instead of per window is the least preferred option: a killed run would then lose the whole run's work rather than one window, undoing silver's per-window idempotency design;
   - a small pre-aggregated table written by silver (e.g. daily counts), which reports read instead of scanning `posts`;
   - DuckDB settings (metadata caching, `threads`), if they help.
 - **Deliverable:** results in `docs/plans/notes/reports-spike.md`.
@@ -127,7 +133,10 @@ Changes go through Pulumi, in the order data → platform → apps.
     - **Pipeline health** (`silver_runs`): windows and bronze rows per hour, appended rows per table (from `counts`), and the lag of `bronze_through` behind each run's `finished_at`; plus rejects per day. It reads only silver's own run and reject tables, so it doesn't wait for S3.
     - **Activity:** posts, likes and reposts per day.
     - **Languages:** top languages per day, from `langs` (unnested), with a date-range filter.
-  - The content pages (activity, languages) read **`posts_current`** from WP S3 (in progress), not raw `posts`, so edits and deletes are handled once, in one place. Until S3 lands they can be prototyped on `posts`, but don't merge them that way.
+  - The content pages (activity, languages) use **`posts_current`** from WP S3, not raw `posts`, so edits and deletes are handled once, in one place. Until S3 lands they can be prototyped on `posts`, but don't merge them that way.
+    - **Cost:** S3's views scan whole tables, because "latest version per `uri`" can't be pruned by `day`. Over every post (15M+ and growing) on every hourly build, that will eventually break the 5-minute build threshold and could exhaust the build pod's memory. So pages must not aggregate over all of `posts_current`. Either restrict it to a bounded date range (e.g. the last 30 days, filtering `posts` by `day` before the latest-version step), or read daily aggregates maintained incrementally, such as a small table silver writes per window (one of R1's levers).
+    - **Decide:** which of the two, per page. Record it in this WP.
+  - **View definitions:** S3's views are SQL templates in `silver/sql/`, rendered by `bsky_silver.views` (`python -m bsky_silver.views <namespace>` prints them). The reports source must generate its views from those files, for example a build step that renders them into the source's prelude, rather than copy them, so there is one definition.
   - **Local build:** document in `reports/CLAUDE.md` how to build against the lake from a laptop (export SSO credentials as in the repo `CLAUDE.md`, then `npm run sources && npm run build`), and that it is slow from outside the region (see [Measurements](#measurements-so-far)).
   - **Tests:** a build against a small local fixture (Parquet or a DuckDB file with the silver schema, no AWS access), so CI can check that pages compile and queries run.
     - **Decide:** whether one source switches between the lake and the fixture by env var, or the fixture is a second source.
@@ -144,7 +153,7 @@ Changes go through Pulumi, in the order data → platform → apps.
 - **Serving:** a Deployment `reports-web` (nginx, one replica) with a ClusterIP Service.
   - **Decide:** where the built site lives:
     - **S3 prefix + sync (default):** the build uploads the site to a `reports/` prefix in the warehouse bucket. That needs `PutObject` on that prefix only, as a separate statement of the `bsky-reports` policy, and R1's read-only test then covers `iceberg/` only. nginx serves a local copy that a sidecar refreshes from S3. It survives pod restarts and keeps the last good build when a build fails.
-    - **PVC:** the build writes to a volume nginx mounts. The simplest data path, but it needs a `ReadWriteMany` volume, or the build and nginx pinned to one node with `ReadWriteOnce`.
+    - **PVC:** the build writes to a volume nginx mounts. Auto Mode provides EBS volumes, which are `ReadWriteOnce` only, so the build and nginx would have to share one node (and the CronJob pod would need node affinity to the nginx pod). Not recommended; in practice the choice is between the other two.
     - **The build image serves its own output:** no shared storage, but it becomes a long-running pod rebuilt on a schedule, and a failed build leaves nothing to serve.
   - Whichever is chosen, a failed build must leave the previous site in place.
 - **Access:**

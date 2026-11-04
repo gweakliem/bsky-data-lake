@@ -2,4 +2,4 @@ encryptionsalt: v1:x7qva1cKcY0=:v1:eSXomRcb/4o96Sd4:nuZFdQlEgOviVicdIpjd9a+cHpD6
 config:
   bsky-apps:loaderImageTag: "447e66a"
   bsky-apps:ingestImageTag: a287294
-  bsky-apps:silverImageTag: 7898b11
+  bsky-apps:silverImageTag: 36b7137

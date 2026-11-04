@@ -131,6 +131,15 @@ Prerequisite for unattended running and for D4.
 
 ## WP S3: edges and current-state views
 
+**Status: done (2026-11-03), not yet deployed or backfilled.** See `silver/CLAUDE.md`; 231 tests (16 new).
+- **`post_edges`** is built in the silver job, in each window, from the same staged rows as the tables, and appended with the same `event_id` anti-join (the edge's `event_id` is its source's plus `|<type>`). Beyond the columns below it carries the source's `rev`, `time_us`, `received_at` and `bronze_ingested_at`, which the anti-join and `post_edges_current` need. Partitioned by `day`, like its source.
+- **Only edges to posts:** likes, reposts and record embeds can also point at feed generators, lists and starter packs; those are left out.
+- **Backfill:** windows recorded before edges existed (no `post_edges` key in `silver_runs.counts.appended`) get their edges after the job has caught up, one window at a time, read back from the silver tables by `bronze_ingested_at`. Finished windows go to `post_edges_backfill`, so a run killed at its deadline resumes there. It is the same memory as the per-window edge step, and needs no infra change.
+- **Decided: views are portable SQL, not Glue views.** Glue/Athena views can only be read by Athena, while reporting will use DuckDB and the jobs Sail. `silver/sql/*.sql` are plain SELECTs with `{silver}` (namespace) and spec-version placeholders; `bsky_silver.views.statements` makes them `CREATE OR REPLACE TEMPORARY VIEW`s. The tests run each view on Sail and on DuckDB over the same rows, so no dialect differences remain to note (no `QUALIFY`, `* EXCEPT` or anti-join syntax).
+- **Changed from the plan:** the support views join `posts_current` on `uri` only and add `current_cid` and `stale` (`cid <> current_cid`), one row per post, preferring the current `cid`. An inner join on `uri` and `cid` would drop an edited post's old classification instead of showing it as stale, which the acceptance asks for; consumers wanting fresh rows filter `NOT stale`. Also added `post_edges_current` (latest version of each source, no deleted sources: unliked likes, deleted replies), since the plan's delete rule applies to edges too.
+- **"Later delete"** compares `rev` (TIDs, which sort as strings within a repo), matching the dedup rule; the dedup key `(did, collection, rkey)` is `uri`.
+- **Deferred:** the views scan whole tables (the latest-version window function can't be pruned by `day`). C2/E2 should read new posts by watermark from `posts` and check them against `posts_current` only for the URIs they process, or materialize it, if a full scan is too slow. The embedding view filters on `spec_version` only, not `model`; E2 should fix the model inside a spec version.
+
 - **Depends on:** S2.
 - **`post_edges`:** `(src_uri, dst_uri, type, src_did, created_at, day)`, where `type` is one of:
   - `reply_parent` and `reply_root` (both from `posts`);

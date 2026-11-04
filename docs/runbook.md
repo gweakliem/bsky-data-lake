@@ -129,13 +129,15 @@ SELECT count(*) AS windows, sum(bronze_rows) AS bronze_rows, max(bronze_through)
 FROM bsky_silver.silver_runs;
 ```
 
-`counts` is JSON with three keys: `appended` (rows written per table), `staged` (the same before deduplication) and `ignored` (rows per collection that has no silver table).
+`counts` is JSON with three keys: `appended` (rows written per table, including `post_edges`), `staged` (the same before deduplication) and `ignored` (rows per collection that has no silver table).
 
 ## Silver
 
 The CronJob runs at `:05` each hour with `concurrencyPolicy: Forbid`, so a run that's still going makes the next one skip. Each run processes windows of up to 500k bronze rows until it has caught up to five minutes ago, then exits. A window always takes whole loader commits, so a single loader commit can make a window bigger than 500k rows.
 
 **During a backlog**, a run keeps going until `activeDeadlineSeconds` (55 min) kills it, so the Job ends `Failed` with `DeadlineExceeded`. That's expected and safe: the interrupted window isn't recorded in `silver_runs`, and the next run redoes it; deduplication drops any rows it had already appended.
+
+**Edge backfill:** once caught up, a run builds `post_edges` for windows processed before edges existed, until the deadline, and the next run continues. Until it's done, runs end `DeadlineExceeded` as during a backlog. Progress: `SELECT count(*), max(bronze_through) FROM bsky_silver.post_edges_backfill`, against the `silver_runs` windows without a `post_edges` count.
 
 **Memory:** peak is about 1 GB + 2 GB per million rows in a window, against a 3 Gi limit (`silverMemoryLimit`). An OOM kill shows as `OOMKilled` in `kubectl describe pod`, and in CloudWatch as a new log stream from the retry pod (the Job retries twice). If it happens, raise `silverMemoryLimit` in the apps stack.
 

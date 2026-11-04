@@ -4,8 +4,12 @@ A run covers a window of bronze `ingested_at` after the last run's watermark,
 holding at most `max_rows` rows (memory grows with a window's rows).
 It parses every row once (Python, via mapInArrow) into a staging Parquet
 directory, then appends each table's rows from there in one Iceberg commit per
-table, and finally records the window in `silver_runs`. Sail's cache() doesn't
-materialize, which is why staging is a real write.
+table, then `post_edges` from the same staged rows, and finally records the
+window in `silver_runs`. Sail's cache() doesn't materialize, which is why
+staging is a real write.
+
+Windows recorded before `post_edges` existed get their edges from
+`backfill_edges`, which reads them back from the silver tables.
 """
 
 from __future__ import annotations
@@ -18,6 +22,7 @@ import time
 import uuid
 from collections import Counter
 from collections.abc import Iterator
+from functools import reduce
 from pathlib import Path
 
 import pyarrow as pa
@@ -25,11 +30,13 @@ from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
 from . import normalize as N
-from .tables import RUNS_DDL, STAGE_DDL, STAGE_SCHEMA, TABLES, ddl
+from .tables import BACKFILL_DDL, EDGES, RUNS_DDL, SCHEMAS, STAGE_DDL, STAGE_SCHEMA, TABLES, ddl
 
 log = logging.getLogger(__name__)
 
 RUNS = "silver_runs"
+# Windows of silver_runs whose edges backfill_edges has built.
+BACKFILL = "post_edges_backfill"
 
 
 def quote(value: str) -> str:
@@ -64,6 +71,36 @@ def normalize_batches(batches: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBa
         )
 
 
+def edges(posts: DataFrame, likes: DataFrame, reposts: DataFrame) -> DataFrame:
+    """post_edges rows: replies and quotes from posts, likes and reposts of posts.
+
+    Only edges to posts: likes, reposts and record embeds can also point at
+    feed generators, lists or starter packs. A post's edit repeats its edges
+    under the new version's event_id; post_edges_current keeps the latest.
+    """
+
+    def select(rows: DataFrame, dst: str, kind: str) -> DataFrame:
+        return rows.where(F.col(dst).startswith("at://") & F.col(dst).contains(f"/{N.POST}/")).select(
+            F.concat("event_id", F.lit(f"|{kind}")).alias("event_id"),
+            F.col("uri").alias("src_uri"),
+            F.col(dst).alias("dst_uri"),
+            F.lit(kind).alias("type"),
+            F.col("did").alias("src_did"),
+            "rev", "created_at", "time_us", "received_at", "bronze_ingested_at", "day",
+        )
+
+    return reduce(
+        DataFrame.unionByName,
+        [
+            select(posts, "reply_parent_uri", "reply_parent"),
+            select(posts, "reply_root_uri", "reply_root"),
+            select(posts, "quote_uri", "quote"),
+            select(likes, "subject_uri", "like"),
+            select(reposts, "subject_uri", "repost"),
+        ],
+    )
+
+
 class SilverJob:
     def __init__(
         self,
@@ -89,9 +126,10 @@ class SilverJob:
 
     def ensure_tables(self) -> None:
         """Create missing tables. The namespace must exist (infra/ manages it)."""
-        for name in TABLES:
+        for name in SCHEMAS:
             self._create(name, ddl(name), "PARTITIONED BY (day)")
         self._create(RUNS, RUNS_DDL, "")
+        self._create(BACKFILL, BACKFILL_DDL, "")
 
     def _create(self, name: str, columns: str, partitioning: str) -> None:
         # Sail's Glue catalog has no warehouse setting, so the location is explicit.
@@ -162,6 +200,10 @@ class SilverJob:
             for name in TABLES:
                 if targets.get(name):
                     appended[name] = self._append(name, stage.where(F.col("target") == name))
+            # Always counted: backfill_edges takes runs without it as built before post_edges.
+            appended[EDGES] = self._append(
+                EDGES, edges(*(stage.where(F.col("target") == t) for t in ("posts", "likes", "reposts")))
+            )
         finally:
             shutil.rmtree(stage_path, ignore_errors=True)
 
@@ -188,13 +230,15 @@ class SilverJob:
         the batch's days (plus the day before) and time_us range, which
         Iceberg's partition and column statistics prune.
         """
-        columns = TABLES[name]
+        columns = SCHEMAS[name]
         rows = rows.select(*columns).dropDuplicates(["event_id"])
         has_time = "time_us" in columns
         bounds = rows.agg(
             F.min("day"), F.max("day"), *([F.min("time_us"), F.max("time_us")] if has_time else [])
         ).collect()[0]
         first_day, last_day = bounds[0], bounds[1]
+        if first_day is None:
+            return 0
         existing = self.spark.table(self.table(name)).where(
             F.col("day").between(F.lit(first_day - dt.timedelta(days=1)), F.lit(last_day))
         )
@@ -206,6 +250,44 @@ class SilverJob:
             # One task per day partition, so one data file per day per commit.
             new.repartition("day").writeTo(self.table(name)).append()
         return count
+
+    def backfill_edges(self, max_windows: int | None = None) -> int:
+        """Build post_edges for windows that runs recorded before the job built edges.
+
+        Those runs have no post_edges count. Each window's posts, likes and
+        reposts are read back from the silver tables by bronze_ingested_at
+        (file statistics prune that well: each run writes its own files) and
+        appended like a run's edges, so a window is the same memory as a run's
+        edge step. A finished window is recorded in post_edges_backfill; one
+        interrupted before that is redone, and the anti-join drops what it had
+        already appended. Returns the number of windows processed.
+        """
+        done = {_utc(r.bronze_through) for r in self.spark.table(self.table(BACKFILL)).collect()}
+        pending = sorted(
+            (r for r in self.spark.table(self.table(RUNS)).collect()
+             if EDGES not in json.loads(r.counts).get("appended", {}) and _utc(r.bronze_through) not in done),
+            key=lambda r: _utc(r.bronze_through),
+        )[:max_windows]
+        if pending:
+            log.info("backfilling post_edges for %d window(s)", len(pending))
+        for run in pending:
+            t0 = time.monotonic()
+            after, through = _utc(run.bronze_after), _utc(run.bronze_through)
+
+            def window(name: str) -> DataFrame:
+                rows = self.spark.table(self.table(name)).where(F.col("bronze_ingested_at") <= F.lit(through))
+                return rows.where(F.col("bronze_ingested_at") > F.lit(after)) if after is not None else rows
+
+            count = self._append(EDGES, edges(window("posts"), window("likes"), window("reposts")))
+            row = {
+                "bronze_after": after,
+                "bronze_through": through,
+                "edges": count,
+                "finished_at": dt.datetime.now(dt.timezone.utc),
+            }
+            self.spark.createDataFrame([row], BACKFILL_DDL).writeTo(self.table(BACKFILL)).append()
+            log.info("backfill: bronze (%s, %s], %d edge(s), in %.1f s", after, through, count, time.monotonic() - t0)
+        return len(pending)
 
     def _record_run(self, run_id, started, after, through, bronze_rows, counts) -> None:
         row = {

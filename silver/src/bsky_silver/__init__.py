@@ -63,6 +63,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--max-runs", type=int, default=None, help="Stop after this many windows (default: until caught up)"
     )
     p.add_argument(
+        "--backfill-edges",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Once caught up, build post_edges for windows processed before the job built edges (default: %(default)s)",
+    )
+    p.add_argument(
         "--spark-remote",
         default=env("SPARK_REMOTE"),
         help="Spark Connect URL of a running Sail server [env: SPARK_REMOTE]. If unset, an embedded server is started.",
@@ -116,13 +122,17 @@ def main(argv: list[str] | None = None) -> int:
             settle=dt.timedelta(minutes=args.settle_minutes),
         )
         job.ensure_tables()
-        runs = 0
+        runs, caught_up = 0, False
         while max_runs is None or runs < max_runs:
             if job.run() is None:
                 log.info("caught up")
+                caught_up = True
                 break
             runs += 1
         log.info("%d run(s)", runs)
+        # New windows first: the backfill only uses time left over, and resumes in the next run.
+        if caught_up and args.backfill_edges:
+            job.backfill_edges()
         return 0
     finally:
         spark.stop()

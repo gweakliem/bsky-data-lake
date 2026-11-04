@@ -2,60 +2,48 @@ import datetime as dt
 import json
 from collections import Counter
 
-import pytest
-from conftest import fixtures, utc
+from conftest import add_bronze, fixtures, utc
 
-from bsky_silver.job import RUNS, SilverJob
-from bsky_silver.normalize import IGNORED, REJECTS, normalize
-from bsky_silver.tables import TABLES
+from bsky_silver.job import BACKFILL, RUNS, SilverJob
+from bsky_silver.normalize import IGNORED, POST, REJECTS, normalize
+from bsky_silver.tables import EDGES, SCHEMAS
 
 INGESTED = utc(2026, 11, 1, 12, 0)
 NOW = utc(2026, 11, 1, 13, 0)
-
-BRONZE_DDL = """received_at TIMESTAMP, time_us BIGINT, payload STRING, source_file STRING,
-    ingested_at TIMESTAMP, day DATE, hour INT"""
-
-
-@pytest.fixture
-def job(spark, tmp_path, request):
-    name = request.node.name.replace("[", "_").replace("]", "").replace("-", "_")
-    namespace = f"silver_{name}"
-    spark.sql(f"CREATE DATABASE IF NOT EXISTS {namespace}")
-    bronze = f"{namespace}.bronze"
-    spark.sql(
-        f"CREATE TABLE {bronze} ({BRONZE_DDL}) USING iceberg PARTITIONED BY (day, hour) LOCATION '{(tmp_path / 'bronze').as_uri()}'"
-    )
-    job = SilverJob(spark, bronze, namespace, (tmp_path / "silver").as_uri(), tmp_path / "staging")
-    job.ensure_tables()
-    yield job
-    for table in [*TABLES, RUNS, "bronze"]:
-        spark.sql(f"DROP TABLE IF EXISTS {namespace}.{table}")
-
-
-def add_bronze(job: SilverJob, payloads: list[str], ingested_at: dt.datetime, received_at: dt.datetime | None = None):
-    received_at = received_at or ingested_at - dt.timedelta(seconds=30)
-    rows = []
-    for payload in payloads:
-        try:
-            time_us = json.loads(payload).get("time_us")
-        except ValueError:
-            time_us = None
-        rows.append((received_at, time_us, payload, "file:///src.parquet", ingested_at, received_at.date(), received_at.hour))
-    job.spark.createDataFrame(rows, BRONZE_DDL).writeTo(job.bronze_table).append()
 
 
 def payloads() -> list[str]:
     return [json.dumps(event) for _, event in fixtures()]
 
 
+def expected_edges(items: list[str]) -> set[tuple[str, str, str]]:
+    """(src_uri, dst_uri, type) of every edge to a post."""
+    sources = {
+        "posts": [("reply_parent_uri", "reply_parent"), ("reply_root_uri", "reply_root"), ("quote_uri", "quote")],
+        "likes": [("subject_uri", "like")],
+        "reposts": [("subject_uri", "repost")],
+    }
+    edges = set()
+    for target, fields in map(normalize, items):
+        for column, kind in sources.get(target, []):
+            dst = fields.get(column)
+            if dst and dst.startswith("at://") and f"/{POST}/" in dst:
+                edges.add((fields["uri"], dst, kind))
+    return edges
+
+
 def expected_counts(items: list[str]) -> Counter:
     """Rows per table: distinct events, since the S1 sample repeats some across cases."""
     rows = {(t, f["event_id"]) for t, f in map(normalize, items) if t != IGNORED}
-    return Counter(t for t, _ in rows)
+    return Counter(t for t, _ in rows) + Counter({EDGES: len(expected_edges(items))})
 
 
 def table_counts(job: SilverJob) -> Counter:
-    return Counter({name: job.spark.table(job.table(name)).count() for name in TABLES})
+    return Counter({name: job.spark.table(job.table(name)).count() for name in SCHEMAS})
+
+
+def edge_set(job: SilverJob) -> set[tuple[str, str, str]]:
+    return {(r.src_uri, r.dst_uri, r.type) for r in job.spark.table(job.table(EDGES)).collect()}
 
 
 def test_run_fills_every_table(job):
@@ -176,3 +164,78 @@ def test_tables_partition_by_day(job, tmp_path):
     job.run(NOW)
     dirs = {p.parent.name for p in (tmp_path / "silver").rglob("data/*/*.parquet")}
     assert dirs == {"day=2026-11-01"}
+
+
+def test_edges_from_posts_likes_and_reposts(job):
+    add_bronze(job, payloads(), INGESTED)
+    job.run(NOW)
+
+    edges = edge_set(job)
+    assert edges == expected_edges(payloads())
+    assert {kind for _, _, kind in edges} == {"reply_parent", "reply_root", "quote", "like", "repost"}
+    rows = job.spark.table(job.table(EDGES)).collect()
+    assert all(r.event_id.endswith("|" + r.type) and r.src_uri.startswith(f"at://{r.src_did}/") for r in rows)
+
+
+def test_edges_only_point_at_posts(job):
+    feed = "at://did:plc:creator/app.bsky.feed.generator/whats-hot"
+    like = {
+        "did": "did:plc:liker", "time_us": 1761998400000000, "kind": "commit",
+        "commit": {
+            "rev": "3m4aaaaaaaa22", "operation": "create", "collection": "app.bsky.feed.like", "rkey": "3m4aaaaaaaa22",
+            "cid": "bafy", "record": {"subject": {"uri": feed, "cid": "bafy"}, "createdAt": "2026-11-01T11:59:00Z"},
+        },
+    }
+    add_bronze(job, [json.dumps(like)], INGESTED)
+    counts = job.run(NOW)
+    assert counts["appended"] == {"likes": 1, EDGES: 0}
+
+
+def forget_edges(job: SilverJob) -> None:
+    """Make the recorded runs look like they ran before the job built edges."""
+    runs = job.spark.table(job.table(RUNS)).collect()
+    job.spark.sql(f"DELETE FROM {job.table(EDGES)}")
+    job.spark.sql(f"DELETE FROM {job.table(RUNS)}")
+    rows = []
+    for r in runs:
+        counts = json.loads(r.counts)
+        del counts["appended"][EDGES]
+        rows.append(r.asDict() | {"counts": json.dumps(counts)})
+    job.spark.createDataFrame(rows, job.spark.table(job.table(RUNS)).schema).writeTo(job.table(RUNS)).append()
+
+
+def test_backfill_builds_edges_for_earlier_windows(job):
+    for i, ingested in enumerate([INGESTED - dt.timedelta(hours=2), INGESTED - dt.timedelta(hours=1), INGESTED]):
+        add_bronze(job, payloads()[i * 70 : (i + 1) * 70], ingested)
+    job.max_rows = 70
+    while job.run(NOW):
+        pass
+    built = edge_set(job)
+    forget_edges(job)
+    assert edge_set(job) == set()
+
+    # Interrupted after one window: the next backfill does the other two.
+    assert job.backfill_edges(max_windows=1) == 1
+    assert job.backfill_edges() == 2
+    assert edge_set(job) == built == expected_edges(payloads())
+    assert job.backfill_edges() == 0
+    # Runs that built their own edges are never backfilled.
+    add_bronze(job, payloads()[:10], NOW, received_at=NOW)
+    job.run(NOW + dt.timedelta(minutes=10))
+    assert job.backfill_edges() == 0
+
+
+def test_backfill_rerun_of_a_window_is_idempotent(job):
+    add_bronze(job, payloads(), INGESTED)
+    job.run(NOW)
+    before = edge_set(job)
+    count = job.spark.table(job.table(EDGES)).count()
+    forget_edges(job)
+    job.backfill_edges()
+
+    # Edges appended, but the backfill was killed before recording the window.
+    job.spark.sql(f"DELETE FROM {job.table(BACKFILL)}")
+    assert job.backfill_edges() == 1
+
+    assert edge_set(job) == before
+    assert job.spark.table(job.table(EDGES)).count() == count

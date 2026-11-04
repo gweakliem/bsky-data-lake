@@ -6,6 +6,7 @@ Work plans for the next phases of the data lake. Each plan is split into work pa
 |---|---|
 | [data-pipeline.md](data-pipeline.md) | Silver layer, Jev classification, embeddings and search |
 | [deployment.md](deployment.md) | Running everything on EKS, managed by Pulumi |
+| [reporting.md](reporting.md) | Dashboards over silver: Evidence + DuckDB, built in the cluster, viewed by port-forward |
 
 ## Dependency overview
 
@@ -18,6 +19,10 @@ D1 (loader image) ──┐
 D0 ──► D2 ──────────┼──► D4a (loader) ──► D4b (ingestor) ──► D5 ──► D6     (deployment)
 D0 ──► D3 ──────────┘                          ▲
                                      P1 + ingestor image
+
+R1 (access + spike) ──► R2 (reports project) ──► R3 (deploy)        (reporting)
+                          ▲
+                S3 (content pages only)
 
 Done: D0 (IAM access), D3 (cluster), P1 (cursor resume), S1 (bronze survey), S2 (silver job), D4a (loader on EKS), D4b (ingestor on EKS) and D6 apart from job alarms. D1 and D2 are done apart from CI.
 D5 adds each pipeline job (S2, C2, E2, E3) as it lands.

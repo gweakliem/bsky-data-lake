@@ -128,10 +128,13 @@ Changes go through Pulumi, in the order data → platform → apps.
 
 - **Depends on:** R1 for the in-cluster role, though development can start in parallel against the lake from a laptop. S3 for the content pages (below), not for the health page.
 - **Goal:** a `reports/` project that builds locally, against a fixture and against the lake.
-- **Status (2026-11-06):** scaffolded on Framework; the pipeline health page builds from the fixture and from the lake (numbers match Athena), with tests. Open: the activity and languages pages, rendering `silver/sql/` views into the loaders, and the bronze read grant applied in the data stack.
+- **Status: done (2026-11-06).** Three pages (pipeline health, activity, languages) build from the fixture (`npm test`, no AWS) and from the lake, with numbers matching Athena (windows, bronze rows and likes appended over 7 days; likes and current posts on 2026-11-05). Data files are 0.2-29 kB. A lake build from a laptop takes about 4 minutes; R3 measures it in the cluster.
 - **Decided:**
   - **`ATTACH`:** `reports/lib/lake.py` connects once per loader: `CREATE SECRET` (credential chain) and `ATTACH` of the Glue catalog, account ID from `BSKY_AWS_ACCOUNT_ID`. SQL files name `{silver}` and `{bronze}` and never the catalog.
   - **Fixture:** one code path switched by `BSKY_REPORTS_FIXTURE=1`, which builds in-memory tables with the lake's names and columns (`reports/lib/fixture.py`). `npm test` builds from it.
+  - **Views:** `reports/lib/lake.py` renders `posts_current` from `silver/sql/` with `bsky_silver.views` (loaded from its file, without the Spark-importing package), so there is one definition.
+  - **Bounding `posts_current`:** both content pages use a bounded date range, the last 14 days (`RECENT_DAYS`): the view reads `posts` and `deletes` filtered by `day` first. Daily aggregates written by silver remain the lever if builds outgrow their slot.
+  - **Languages:** grouped by primary subtag (`en-US` is `en`), each post counted once per language; posts without `langs` are `(none)`, languages outside the window's top 12 are `(other)`. Shares on the page are of language tags.
 - **Tasks (as planned for Evidence; the Framework equivalents are in `reports/CLAUDE.md`):**
   - Scaffold an Evidence project in `reports/` (Node; pin Evidence and `@evidence-dev/duckdb`, commit the lockfile). Add a `reports/CLAUDE.md` with commands and gotchas, as the other subprojects have.
   - **Source:** a DuckDB source that runs the `CREATE SECRET` and `ATTACH` above, with the account ID and region from env vars (add them to `.env.example`). Source queries are `.sql` files, one per dataset, each aggregating.
@@ -157,7 +160,7 @@ Changes go through Pulumi, in the order data → platform → apps.
 - **Depends on:** R1, R2.
 - **Image:** `reports/Dockerfile` on a Node base with Python and uv added (the loaders), running `npm run build` as a non-root user. Preinstall DuckDB's `httpfs` and `iceberg` extensions in the image rather than downloading them on every build, and note that Framework fetches its `npm:` imports at build time (or vendor them). Multi-arch, pushed to a new ECR repo `bsky/reports` (platform stack), tagged with the short commit hash like the other images.
 - **CronJob `reports`** (apps stack): `:30` hourly, service account `reports`, `concurrencyPolicy: Forbid`, `backoffLimit: 2`, `activeDeadlineSeconds` under an hour. Region and account ID from config, image tag from `reportsImageTag`.
-- **Serving:** a Deployment `reports-web` (nginx, one replica) with a ClusterIP Service.
+- **Serving:** a Deployment `reports-web` (nginx, one replica) with a ClusterIP Service. Framework links pages without `.html` (`/activity`), so nginx needs `try_files $uri $uri.html $uri/ =404`.
   - **Decide:** where the built site lives:
     - **S3 prefix + sync (default):** the build uploads the site to a `reports/` prefix in the warehouse bucket. That needs `PutObject` on that prefix only, as a separate statement of the `bsky-reports` policy, and R1's read-only test then covers `iceberg/` only. nginx serves a local copy that a sidecar refreshes from S3. It survives pod restarts and keeps the last good build when a build fails.
     - **PVC:** the build writes to a volume nginx mounts. Auto Mode provides EBS volumes, which are `ReadWriteOnce` only, so the build and nginx would have to share one node (and the CronJob pod would need node affinity to the nginx pod). Not recommended; in practice the choice is between the other two.

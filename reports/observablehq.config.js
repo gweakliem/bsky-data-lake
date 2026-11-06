@@ -7,5 +7,9 @@ export default {
   theme: ["air", "near-midnight"],
   pager: false,
   footer: "Built from the silver tables (and bronze freshness) by DuckDB over the Iceberg catalog.",
-  pages: [{name: "Pipeline health", path: "/"}]
+  pages: [
+    {name: "Pipeline health", path: "/"},
+    {name: "Activity", path: "/activity"},
+    {name: "Languages", path: "/languages"}
+  ]
 };

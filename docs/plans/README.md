@@ -24,7 +24,7 @@ R1 (access + spike) ──► R2 (reports project) ──► R3 (deploy)        
                           ▲
                 S3 (content pages only)
 
-Done: D0 (IAM access), D3 (cluster), P1 (cursor resume), S1 (bronze survey), S2 (silver job), S3 (edges and views), D4a (loader on EKS), D4b (ingestor on EKS) and D6 apart from job alarms. D1 and D2 are done apart from CI.
+Done: D0 (IAM access), D3 (cluster), P1 (cursor resume), S1 (bronze survey), S2 (silver job), S3 (edges and views), R2 (reports site), D4a (loader on EKS), D4b (ingestor on EKS) and D6 apart from job alarms. D1 and D2 are done apart from CI.
 D5 adds each pipeline job (S2, C2, E2, E3) as it lands.
 ```
 

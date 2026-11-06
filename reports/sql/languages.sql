@@ -3,8 +3,14 @@
 -- none count as '(none)'. Languages
 -- outside the window's top 12 fold into '(other)' so the result stays small.
 WITH tagged AS (
-    SELECT DISTINCT uri, day, coalesce(nullif(lower(split_part(trim(lang), '-', 1)), ''), '(none)') AS lang
-    FROM (SELECT uri, day, unnest(CASE WHEN len(langs) > 0 THEN langs ELSE [NULL] END) AS lang FROM posts_current)
+    -- Primary subtags, deduplicated within each post (en-US and en count once).
+    SELECT day, coalesce(lang, '(none)') AS lang
+    FROM (
+        SELECT day, unnest(coalesce(nullif(
+            list_distinct(list_filter(list_transform(langs, l -> lower(split_part(trim(l), '-', 1))), l -> l <> '')),
+            []), [NULL])) AS lang
+        FROM posts_current
+    )
 ),
 top AS (
     SELECT lang FROM tagged WHERE lang <> '(none)' GROUP BY lang ORDER BY count(*) DESC LIMIT 12

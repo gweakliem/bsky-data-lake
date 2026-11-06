@@ -391,6 +391,9 @@ silver_policy_document = pulumi.Output.all(account_id, region).apply(
 # Through Glue's Iceberg REST endpoint (DuckDB attaches the catalog with it),
 # which also needs glue:GetCatalog.
 
+# Prefix in the warehouse bucket for the built report site (see reports/lib/publish.py).
+reports_site_prefix = config.get("reportsSitePrefix") or "reports"
+
 reports_policy_document = pulumi.Output.all(account_id, region).apply(
     lambda args: json.dumps(
         {
@@ -403,7 +406,19 @@ reports_policy_document = pulumi.Output.all(account_id, region).apply(
                     "Effect": "Allow",
                     "Action": "s3:ListBucket",
                     "Resource": warehouse_bucket_arn,
-                    "Condition": {"StringLike": {"s3:prefix": [f"iceberg/{silver_database_name}/*", f"iceberg/{glue_database}/*"]}},
+                    "Condition": {
+                        "StringLike": {
+                            "s3:prefix": [f"iceberg/{silver_database_name}/*", f"iceberg/{glue_database}/*", f"{reports_site_prefix}/*"]
+                        }
+                    },
+                },
+                # The built site: the CronJob uploads builds here and the web pod's
+                # sidecar downloads them. The lake itself stays read-only.
+                {
+                    "Sid": "PublishSite",
+                    "Effect": "Allow",
+                    "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"],
+                    "Resource": f"{warehouse_bucket_arn}/{reports_site_prefix}/*",
                 },
                 {
                     "Sid": "ReadLake",
@@ -719,6 +734,7 @@ pulumi.export("athena_results_bucket", athena_results.bucket)
 pulumi.export("glue_database", database.name)
 pulumi.export("silver_glue_database", silver_database.name)
 pulumi.export("silver_location", f"{warehouse}/{silver_database_name}")
+pulumi.export("reports_site_url", f"s3://{warehouse_bucket}/{reports_site_prefix}")
 pulumi.export("raw_location", f"s3://{bucket}/{raw_prefix.rstrip('/')}")
 pulumi.export("raw_table_location", f"{warehouse}/{glue_database}/jetstream")
 pulumi.export("loader_policy_document", loader_policy_document)

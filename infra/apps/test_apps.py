@@ -8,16 +8,24 @@ import pulumi
 REPO_URL = "123456789012.dkr.ecr.us-west-2.amazonaws.com/bsky/iceberg-loader"
 INGEST_REPO_URL = "123456789012.dkr.ecr.us-west-2.amazonaws.com/bsky/ingest"
 SILVER_REPO_URL = "123456789012.dkr.ecr.us-west-2.amazonaws.com/bsky/silver"
+REPORTS_REPO_URL = "123456789012.dkr.ecr.us-west-2.amazonaws.com/bsky/reports"
 STACK_OUTPUTS = {
     "kubeconfig": "{}",
     "namespace": "bsky",
-    "repository_urls": {"iceberg-loader": REPO_URL, "ingest": INGEST_REPO_URL, "silver": SILVER_REPO_URL},
+    "repository_urls": {
+        "iceberg-loader": REPO_URL,
+        "ingest": INGEST_REPO_URL,
+        "silver": SILVER_REPO_URL,
+        "reports": REPORTS_REPO_URL,
+    },
     "queue_url": "https://sqs.us-west-2.amazonaws.com/123456789012/bsky-raw-files",
     "raw_table_location": "s3://test-warehouse/iceberg/bsky_raw/jetstream",
     "raw_location": "s3://test-bucket/jetstream",
     "logging_namespace": "logging",
     "container_log_group": "/bsky/containers",
     "silver_location": "s3://test-warehouse/iceberg/bsky_silver",
+    "reports_site_url": "s3://test-warehouse/reports",
+    "reports_role_arn": "arn:aws:iam::123456789012:role/bsky/bsky-reports",
 }
 
 
@@ -35,6 +43,7 @@ pulumi.runtime.set_mocks(Mocks(), project="bsky-apps", stack="dev", preview=Fals
 pulumi.runtime.set_config("bsky-apps:loaderImageTag", "abc1234")
 pulumi.runtime.set_config("bsky-apps:ingestImageTag", "def5678")
 pulumi.runtime.set_config("bsky-apps:silverImageTag", "fed4321")
+pulumi.runtime.set_config("bsky-apps:reportsImageTag", "ccc1111")
 
 _spec = importlib.util.spec_from_file_location("apps_stack", Path(__file__).with_name("__main__.py"))
 apps = importlib.util.module_from_spec(_spec)
@@ -151,3 +160,41 @@ def test_reports_service_account():
         assert (name, namespace) == ("reports", "bsky")
 
     return pulumi.Output.all(apps.reports_sa.metadata.name, apps.reports_sa.metadata.namespace).apply(check)
+
+
+@pulumi.runtime.test
+def test_reports_cronjob():
+    def check(spec):
+        assert spec["schedule"] == "30 * * * *"
+        assert spec["concurrency_policy"] == "Forbid"
+        job = spec["job_template"]["spec"]
+        assert job["active_deadline_seconds"] < 3600
+        assert job["template"]["metadata"]["annotations"]["karpenter.sh/do-not-disrupt"] == "true"
+        pod = job["template"]["spec"]
+        assert pod["service_account_name"] == "reports"
+        (container,) = pod["containers"]
+        assert container["image"] == f"{REPORTS_REPO_URL}:ccc1111"
+        assert container["args"] == ["s3://test-warehouse/reports"]
+        env = {e["name"]: e["value"] for e in container["env"]}
+        assert env["BSKY_AWS_ACCOUNT_ID"] == "123456789012"
+        # DuckDB's own limit must sit below the pod's.
+        assert env["BSKY_DUCKDB_MEMORY_LIMIT"] == "2GB" and container["resources"]["limits"]["memory"] == "4Gi"
+        assert not any(k.startswith("AWS_ACCESS") or k.startswith("AWS_SECRET") for k in env)
+
+    return apps.reports_build.spec.apply(check)
+
+
+@pulumi.runtime.test
+def test_reports_web_serves_the_synced_site_privately():
+    def check(args):
+        spec, service = args
+        pod = spec["template"]["spec"]
+        assert pod["service_account_name"] == "reports"
+        containers = {c["name"]: c for c in pod["containers"]}
+        assert containers["sync"]["image"] == f"{REPORTS_REPO_URL}:ccc1111"
+        assert containers["sync"]["args"] == ["s3://test-warehouse/reports", "/site"]
+        assert {m["mount_path"]: m.get("read_only") for m in containers["nginx"]["volume_mounts"]}["/site"] is True
+        assert service["type"] == "ClusterIP"
+        assert "try_files $uri $uri.html" in apps.reports_nginx_conf
+
+    return pulumi.Output.all(apps.reports_web.spec, apps.reports_service.spec).apply(check)

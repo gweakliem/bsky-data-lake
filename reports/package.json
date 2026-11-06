@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "clean": "rm -rf src/.observablehq/cache dist",
+    "clean": "rm -rf src/.observablehq/cache/data dist",
     "build": "npm run clean && observable build",
     "build:fixture": "BSKY_REPORTS_FIXTURE=1 npm run build",
     "dev": "observable preview",

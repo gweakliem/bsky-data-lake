@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.venv/
+src/.observablehq/cache/
+**/__pycache__/

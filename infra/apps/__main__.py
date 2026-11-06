@@ -177,7 +177,7 @@ silver_sa = k8s.core.v1.ServiceAccount(
     opts=opts,
 )
 
-# The report build's identity (bsky-reports via Pod Identity); its CronJob comes with R3.
+# The report build's and web pod's identity (bsky-reports via Pod Identity).
 reports_sa = k8s.core.v1.ServiceAccount(
     "reports",
     metadata=k8s.meta.v1.ObjectMetaArgs(name="reports", namespace=ns),
@@ -247,6 +247,160 @@ silver = k8s.batch.v1.CronJob(
                 ),
             ),
         ),
+    ),
+    opts=opts,
+)
+
+# --- Reports: hourly static-site build, served by nginx (see reports/CLAUDE.md) ---
+
+reports_labels = {"app.kubernetes.io/name": "reports", "app.kubernetes.io/part-of": "bsky-data-lake"}
+reports_web_labels = {"app.kubernetes.io/name": "reports-web", "app.kubernetes.io/part-of": "bsky-data-lake"}
+reports_image_tag = config.require("reportsImageTag")
+reports_image = repository_urls.apply(lambda urls: f"{urls['reports']}:{reports_image_tag}")
+reports_site_url = data.require_output("reports_site_url")
+# DuckDB sizes itself from the node's memory, so its limit is set below the pod's.
+reports_memory_limit = config.get("reportsMemoryLimit") or "4Gi"
+reports_duckdb_memory = config.get("reportsDuckdbMemory") or "2GB"
+nginx_image = config.get("nginxImage") or "nginxinc/nginx-unprivileged:1.29.3-alpine"
+# The ATTACH names the catalog by account ID; the role ARN carries it.
+account_id = data.require_output("reports_role_arn").apply(lambda arn: arn.split(":")[4])
+
+reports_build = k8s.batch.v1.CronJob(
+    "reports",
+    metadata=k8s.meta.v1.ObjectMetaArgs(name="reports", namespace=ns, labels=reports_labels),
+    spec=k8s.batch.v1.CronJobSpecArgs(
+        # :30, after silver's :05 run has caught up (about 5 minutes when it isn't behind).
+        schedule="30 * * * *",
+        time_zone="Etc/UTC",
+        concurrency_policy="Forbid",
+        successful_jobs_history_limit=3,
+        failed_jobs_history_limit=3,
+        job_template=k8s.batch.v1.JobTemplateSpecArgs(
+            metadata=k8s.meta.v1.ObjectMetaArgs(labels=reports_labels),
+            spec=k8s.batch.v1.JobSpecArgs(
+                backoff_limit=2,
+                active_deadline_seconds=50 * 60,
+                template=k8s.core.v1.PodTemplateSpecArgs(
+                    metadata=k8s.meta.v1.ObjectMetaArgs(
+                        labels=reports_labels, annotations={"karpenter.sh/do-not-disrupt": "true"}
+                    ),
+                    spec=k8s.core.v1.PodSpecArgs(
+                        service_account_name=reports_sa.metadata.name,
+                        restart_policy="Never",
+                        security_context=pod_security,
+                        containers=[
+                            k8s.core.v1.ContainerArgs(
+                                name="build",
+                                image=reports_image,
+                                args=[reports_site_url],
+                                env=[
+                                    k8s.core.v1.EnvVarArgs(name="AWS_REGION", value=region),
+                                    k8s.core.v1.EnvVarArgs(name="BSKY_AWS_ACCOUNT_ID", value=account_id),
+                                    k8s.core.v1.EnvVarArgs(name="BSKY_DUCKDB_MEMORY_LIMIT", value=reports_duckdb_memory),
+                                    k8s.core.v1.EnvVarArgs(name="BSKY_DUCKDB_TEMP_DIR", value="/scratch/duckdb"),
+                                ],
+                                resources=k8s.core.v1.ResourceRequirementsArgs(
+                                    requests={"cpu": "1", "memory": reports_memory_limit},
+                                    limits={"memory": reports_memory_limit},
+                                ),
+                                volume_mounts=[k8s.core.v1.VolumeMountArgs(name="scratch", mount_path="/scratch")],
+                                security_context=container_security,
+                            )
+                        ],
+                        # DuckDB spills here when a query outgrows its memory limit.
+                        volumes=[
+                            k8s.core.v1.VolumeArgs(
+                                name="scratch", empty_dir=k8s.core.v1.EmptyDirVolumeSourceArgs(size_limit="8Gi")
+                            )
+                        ],
+                    ),
+                ),
+            ),
+        ),
+    ),
+    opts=opts,
+)
+
+# Framework links pages without .html (/activity), hence try_files.
+reports_nginx_conf = """server {
+    listen 8080;
+    root /site/current;
+    location / {
+        try_files $uri $uri.html $uri/ =404;
+    }
+}
+"""
+reports_nginx_config = k8s.core.v1.ConfigMap(
+    "reports-web",
+    metadata=k8s.meta.v1.ObjectMetaArgs(name="reports-web", namespace=ns, labels=reports_web_labels),
+    data={"default.conf": reports_nginx_conf},
+    opts=opts,
+)
+
+reports_web = k8s.apps.v1.Deployment(
+    "reports-web",
+    metadata=k8s.meta.v1.ObjectMetaArgs(name="reports-web", namespace=ns, labels=reports_web_labels),
+    spec=k8s.apps.v1.DeploymentSpecArgs(
+        replicas=1,
+        selector=k8s.meta.v1.LabelSelectorArgs(match_labels=reports_web_labels),
+        template=k8s.core.v1.PodTemplateSpecArgs(
+            metadata=k8s.meta.v1.ObjectMetaArgs(
+                labels=reports_web_labels,
+                # Roll the pod when the nginx config changes.
+                annotations={"bsky/nginx-conf-sha256": hashlib.sha256(reports_nginx_conf.encode()).hexdigest()},
+            ),
+            spec=k8s.core.v1.PodSpecArgs(
+                service_account_name=reports_sa.metadata.name,
+                security_context=pod_security,
+                containers=[
+                    k8s.core.v1.ContainerArgs(
+                        name="nginx",
+                        image=nginx_image,
+                        ports=[k8s.core.v1.ContainerPortArgs(name="http", container_port=8080)],
+                        resources=k8s.core.v1.ResourceRequirementsArgs(
+                            requests={"cpu": "50m", "memory": "32Mi"}, limits={"memory": "64Mi"}
+                        ),
+                        volume_mounts=[
+                            k8s.core.v1.VolumeMountArgs(name="site", mount_path="/site", read_only=True),
+                            k8s.core.v1.VolumeMountArgs(name="nginx-conf", mount_path="/etc/nginx/conf.d", read_only=True),
+                        ],
+                        security_context=container_security,
+                    ),
+                    # Downloads each new published build and repoints /site/current at it.
+                    k8s.core.v1.ContainerArgs(
+                        name="sync",
+                        image=reports_image,
+                        command=["uv", "run", "--frozen", "--no-dev", "python", "lib/sync_site.py"],
+                        args=[reports_site_url, "/site"],
+                        env=[k8s.core.v1.EnvVarArgs(name="AWS_REGION", value=region)],
+                        resources=k8s.core.v1.ResourceRequirementsArgs(
+                            requests={"cpu": "25m", "memory": "128Mi"}, limits={"memory": "256Mi"}
+                        ),
+                        volume_mounts=[k8s.core.v1.VolumeMountArgs(name="site", mount_path="/site")],
+                        security_context=container_security,
+                    ),
+                ],
+                volumes=[
+                    k8s.core.v1.VolumeArgs(name="site", empty_dir=k8s.core.v1.EmptyDirVolumeSourceArgs(size_limit="1Gi")),
+                    k8s.core.v1.VolumeArgs(
+                        name="nginx-conf",
+                        config_map=k8s.core.v1.ConfigMapVolumeSourceArgs(name=reports_nginx_config.metadata.name),
+                    ),
+                ],
+            ),
+        ),
+    ),
+    opts=opts,
+)
+
+# ClusterIP only: viewed through `kubectl port-forward`, never exposed outside the cluster.
+reports_service = k8s.core.v1.Service(
+    "reports-web",
+    metadata=k8s.meta.v1.ObjectMetaArgs(name="reports-web", namespace=ns, labels=reports_web_labels),
+    spec=k8s.core.v1.ServiceSpecArgs(
+        type="ClusterIP",
+        selector=reports_web_labels,
+        ports=[k8s.core.v1.ServicePortArgs(name="http", port=80, target_port="http")],
     ),
     opts=opts,
 )

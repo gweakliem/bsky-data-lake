@@ -82,6 +82,11 @@ def connect() -> tuple[duckdb.DuckDBPyConnection, dict[str, str]]:
     _load_dotenv()
     con = duckdb.connect()
     con.execute("SET TimeZone = 'UTC'")
+    # In a container DuckDB sizes itself from the node's memory, not the pod's limit.
+    if limit := os.environ.get("BSKY_DUCKDB_MEMORY_LIMIT"):
+        con.execute(f"SET memory_limit = '{limit}'")
+    if temp := os.environ.get("BSKY_DUCKDB_TEMP_DIR"):
+        con.execute(f"SET temp_directory = '{temp}'")
     if os.environ.get("BSKY_REPORTS_FIXTURE"):
         import fixture
 

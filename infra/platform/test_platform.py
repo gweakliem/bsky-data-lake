@@ -170,7 +170,7 @@ def test_ecr_scans_and_expires():
         assert [r["selection"]["tagStatus"] for r in rules] == ["untagged", "tagged"]
 
     repo = platform.repositories["iceberg-loader"]
-    assert sorted(platform.repositories) == ["iceberg-loader", "ingest", "silver"]
+    assert sorted(platform.repositories) == ["iceberg-loader", "ingest", "reports", "silver"]
     lifecycle = mocks.resources["aws:ecr/lifecyclePolicy:LifecyclePolicy"][0]
     return pulumi.Output.all(repo.image_scanning_configuration, lifecycle["policy"]).apply(check)
 

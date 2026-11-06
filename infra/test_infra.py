@@ -381,9 +381,13 @@ def test_reports_read_only_lake():
             "arn:aws:s3:::test-warehouse/iceberg/bsky_raw/*",
         ]
         assert "glue:GetCatalog" in stmts["ReadLakeCatalog"]["Action"]
-        # Read-only, and only the warehouse's Iceberg tables (not the raw bucket).
-        actions = [a for s in stmts.values() for a in ([s["Action"]] if isinstance(s["Action"], str) else s["Action"])]
+        # Read-only on the lake (the warehouse's Iceberg tables, not the raw bucket);
+        # writes only to the site prefix.
+        lake = [s for sid, s in stmts.items() if sid != "PublishSite"]
+        actions = [a for s in lake for a in ([s["Action"]] if isinstance(s["Action"], str) else s["Action"])]
         assert all(a.split(":")[1].startswith(("Get", "List")) for a in actions)
+        assert stmts["PublishSite"]["Resource"] == "arn:aws:s3:::test-warehouse/reports/*"
+        assert "iceberg" not in stmts["PublishSite"]["Resource"]
         assert "test-bucket" not in policy
         assert arn == "arn:aws:iam::123456789012:role/bsky/bsky-reports"
 

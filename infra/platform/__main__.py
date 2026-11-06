@@ -223,7 +223,7 @@ ecr_lifecycle = json.dumps(
 )
 
 repositories = {}
-for image in ["iceberg-loader", "ingest", "silver"]:
+for image in ["iceberg-loader", "ingest", "silver", "reports"]:
     repo = aws.ecr.Repository(
         image,
         name=f"bsky/{image}",

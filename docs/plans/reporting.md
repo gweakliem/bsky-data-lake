@@ -158,6 +158,10 @@ Changes go through Pulumi, in the order data → platform → apps.
 ## WP R3: deploy
 
 - **Depends on:** R1, R2.
+- **Status: done (2026-11-06).** CronJob `reports` builds at `:30` and publishes to the S3 prefix; `reports-web` (nginx plus a sync sidecar) serves the latest build through a ClusterIP Service only. An on-demand Job built in about 2.5 minutes (activity and languages about 57 s each, bronze freshness 19 s), and port-forwarding showed the pages with the latest silver run. A build with a bad account ID failed at its first loader, published nothing, and the previous build stayed served.
+- **Decided:**
+  - **Where the site lives:** the S3 prefix + sync option. Builds upload to `reports/builds/<time>/` and then write `reports/current`, keeping 3 builds; the sidecar polls every 60 s and swaps a symlink, so nginx never serves a half-downloaded build.
+  - **Memory:** the first build ran out of memory at DuckDB's 2 GB limit, in `posts_current`'s window over 14 days (about 50M posts). Languages needs more than 4 GB, so DuckDB gets 6 GB with 4 threads in an 8Gi pod. Growth past that is the cue for silver's daily aggregates.
 - **Image:** `reports/Dockerfile` on a Node base with Python and uv added (the loaders), running `npm run build` as a non-root user. Preinstall DuckDB's `httpfs` and `iceberg` extensions in the image rather than downloading them on every build, and note that Framework fetches its `npm:` imports at build time (or vendor them). Multi-arch, pushed to a new ECR repo `bsky/reports` (platform stack), tagged with the short commit hash like the other images.
 - **CronJob `reports`** (apps stack): `:30` hourly, service account `reports`, `concurrencyPolicy: Forbid`, `backoffLimit: 2`, `activeDeadlineSeconds` under an hour. Region and account ID from config, image tag from `reportsImageTag`.
 - **Serving:** a Deployment `reports-web` (nginx, one replica) with a ClusterIP Service. Framework links pages without `.html` (`/activity`), so nginx needs `try_files $uri $uri.html $uri/ =404`.

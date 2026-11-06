@@ -1,0 +1,19 @@
+{
+  "name": "bsky-reports",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "clean": "rm -rf src/.observablehq/cache dist",
+    "build": "npm run clean && observable build",
+    "build:fixture": "BSKY_REPORTS_FIXTURE=1 npm run build",
+    "dev": "observable preview",
+    "dev:fixture": "BSKY_REPORTS_FIXTURE=1 observable preview",
+    "test": "npm run build:fixture && uv run pytest"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@observablehq/framework": "1.13.4"
+  }
+}

@@ -371,17 +371,20 @@ def test_athena_workgroup_writes_to_its_own_bucket():
 
 
 @pulumi.runtime.test
-def test_reports_read_only_silver():
+def test_reports_read_only_lake():
     def check(args):
         policy, arn = args
         stmts = {s["Sid"]: s for s in json.loads(policy)["Statement"]}
-        assert stmts["ReadSilver"]["Action"] == "s3:GetObject"
-        assert stmts["ReadSilver"]["Resource"] == "arn:aws:s3:::test-warehouse/iceberg/bsky_silver/*"
-        assert "glue:GetCatalog" in stmts["ReadSilverCatalog"]["Action"]
-        # Read-only, and nothing outside silver.
+        assert stmts["ReadLake"]["Action"] == "s3:GetObject"
+        assert stmts["ReadLake"]["Resource"] == [
+            "arn:aws:s3:::test-warehouse/iceberg/bsky_silver/*",
+            "arn:aws:s3:::test-warehouse/iceberg/bsky_raw/*",
+        ]
+        assert "glue:GetCatalog" in stmts["ReadLakeCatalog"]["Action"]
+        # Read-only, and only the warehouse's Iceberg tables (not the raw bucket).
         actions = [a for s in stmts.values() for a in ([s["Action"]] if isinstance(s["Action"], str) else s["Action"])]
         assert all(a.split(":")[1].startswith(("Get", "List")) for a in actions)
-        assert "bsky_raw" not in policy and "test-bucket" not in policy
+        assert "test-bucket" not in policy
         assert arn == "arn:aws:iam::123456789012:role/bsky/bsky-reports"
 
     return pulumi.Output.all(infra.reports_policy_document, infra.reports_role.arn).apply(check)

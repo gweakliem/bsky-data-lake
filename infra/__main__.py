@@ -396,27 +396,34 @@ reports_policy_document = pulumi.Output.all(account_id, region).apply(
         {
             "Version": "2012-10-17",
             "Statement": [
+                # Bronze only for the health page's freshness reading, max(ingested_at)
+                # over recent partitions; reports never read its payloads.
                 {
-                    "Sid": "ListSilverFiles",
+                    "Sid": "ListLakeFiles",
                     "Effect": "Allow",
                     "Action": "s3:ListBucket",
                     "Resource": warehouse_bucket_arn,
-                    "Condition": {"StringLike": {"s3:prefix": [f"iceberg/{silver_database_name}/*"]}},
+                    "Condition": {"StringLike": {"s3:prefix": [f"iceberg/{silver_database_name}/*", f"iceberg/{glue_database}/*"]}},
                 },
                 {
-                    "Sid": "ReadSilver",
+                    "Sid": "ReadLake",
                     "Effect": "Allow",
                     "Action": "s3:GetObject",
-                    "Resource": f"{warehouse_bucket_arn}/iceberg/{silver_database_name}/*",
+                    "Resource": [
+                        f"{warehouse_bucket_arn}/iceberg/{silver_database_name}/*",
+                        f"{warehouse_bucket_arn}/iceberg/{glue_database}/*",
+                    ],
                 },
                 {
-                    "Sid": "ReadSilverCatalog",
+                    "Sid": "ReadLakeCatalog",
                     "Effect": "Allow",
                     "Action": ["glue:GetCatalog", "glue:GetDatabase", "glue:GetDatabases", "glue:GetTable", "glue:GetTables"],
                     "Resource": [
                         f"arn:aws:glue:{args[1]}:{args[0]}:catalog",
                         f"arn:aws:glue:{args[1]}:{args[0]}:database/{silver_database_name}",
                         f"arn:aws:glue:{args[1]}:{args[0]}:table/{silver_database_name}/*",
+                        f"arn:aws:glue:{args[1]}:{args[0]}:database/{glue_database}",
+                        f"arn:aws:glue:{args[1]}:{args[0]}:table/{glue_database}/*",
                     ],
                 },
             ],

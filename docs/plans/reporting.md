@@ -12,7 +12,7 @@ Out of scope for now: ad hoc exploration (Athena's `bsky` workgroup covers that,
 glue.bsky_silver.*  (Iceberg, S3)
         │  Iceberg REST catalog (Glue today; R2 Data Catalog or BigLake later)
         ▼
-DuckDB in the Evidence build ── SQL in reports/sources/ and pages/*.md
+DuckDB in the Framework build ── SQL in reports/sql/, pages in reports/src/*.md
         │  hourly CronJob `reports`, :30
         ▼
 static site (HTML + JS + extracted Parquet) ──► nginx pod ◄── kubectl port-forward
@@ -24,16 +24,20 @@ New code:
 
 | Directory | Contents | Engine |
 |---|---|---|
-| `reports/` | Evidence project (Node): DuckDB source, Markdown pages, Dockerfile | Evidence + DuckDB 1.4 |
+| `reports/` | Observable Framework site (Node) with Python data loaders (uv): Markdown pages, SQL, Dockerfile | Framework 1.13 + DuckDB 1.4 (Python) |
 
 ## Decisions
 
-### Tool: Evidence (evidence.dev)
+### Tool: Observable Framework (changed from Evidence, 2026-11-06)
 
-Evidence is static-site BI as code: Markdown pages with SQL blocks and chart components, built into a static site.
+[Observable Framework](https://observablehq.com/framework/) builds a static site from Markdown pages with JavaScript cells (Observable Plot charts, Inputs tables) and **data loaders**: scripts in any language that run at build time and print a data file. Here the loaders are Python scripts that run DuckDB queries from `reports/sql/`.
 - **Dashboards live in the repo**, reviewed and versioned like everything else.
-- **Nothing is queried at view time.** The build runs each source query and ships the results with the site. Interactivity (filters, dropdowns) runs in the browser on DuckDB-WASM over that snapshot. Freshness is the build schedule, which suits reports over hourly silver.
+- **Nothing is queried at view time.** The build runs each loader and ships its output with the site; the browser only filters and charts that snapshot. Freshness is the build schedule, which suits reports over hourly silver.
 - **No always-on application:** no app database, nothing running beyond a static file server.
+
+**Why not Evidence (the original choice):** by 2026-11 Evidence's template had moved to *Evidence Studio*, a hosted product (a `curl | sh` CLI, `evidence login`, ClickHouse SQL by default), and its `npm` scripts print "deprecated". The open-source package (`@evidence-dev/evidence` 40.1.8, 2026-02-06) still exists but is abandoned. Framework was this plan's named fallback; it keeps the architecture (static build, DuckDB, pages in the repo).
+
+**Risk: project activity.** Framework's last release (1.13.4) was on 2026-04-06. If it stalls too, the SQL and loaders (`reports/sql/`, `reports/lib/`) carry over to any static-site tool; only the page markup is Framework's.
 
 **Rejected:**
 - **Metabase:** needs an application database (Neon and Supabase were considered) and an always-on JVM pod, and click-built dashboards live outside the repo.
@@ -41,8 +45,7 @@ Evidence is static-site BI as code: Markdown pages with SQL blocks and chart com
 - **QuickSight:** strongly disliked, and AWS-only.
 - **Grafana:** time-series oriented; tables and top-N lists are awkward.
 - **Streamlit:** live queries and an always-on pod for what are mostly fixed reports.
-
-**Risk: project activity.** Evidence's last release (`@evidence-dev/evidence` 40.1.8) was on 2026-02-06, about nine months ago. Watch it. The fallback is **Observable Framework** (data loaders in any language, Observable Plot), which keeps the same architecture: a static build, DuckDB for the queries, pages versioned in the repo. Keeping the source SQL in plain `.sql` files (R2) means such a move mostly rewrites page markup, not queries.
+- **Evidence Studio:** hosted; conflicts with private, self-hosted reports.
 
 ### Query engine: DuckDB over the Iceberg REST catalog
 
@@ -57,16 +60,16 @@ SELECT ... FROM glue.bsky_silver.silver_runs;
 The account ID and region come from the environment at build time, never from a committed file.
 
 - **Portability:** Glue, Cloudflare R2 Data Catalog and Google BigLake all speak Iceberg REST. Moving clouds changes the `ATTACH` endpoint and the credential `SECRET`, not the report SQL.
-- **Version:** Evidence's DuckDB connector (`@evidence-dev/duckdb` 2.0.1) depends on `@duckdb/node-api ^1.4.2`, i.e. DuckDB 1.4. The tests so far used Python DuckDB 1.4.5.
-- **Rejected: Athena as the engine.** It works well (about 2 s for both test queries below, and 0 bytes scanned for a count answered from metadata), but it entangles reporting with AWS, and Evidence has no Athena connector anyway. Athena stays for ad hoc queries.
+- **Version:** Python DuckDB 1.4 (`reports/pyproject.toml`), the version the spike measured.
+- **Rejected: Athena as the engine.** It works well (about 2 s for both test queries below, and 0 bytes scanned for a count answered from metadata), but it entangles reporting with AWS, and it would need AWS credentials and SDKs in every loader. Athena stays for ad hoc queries.
 
-### Data source: silver only
+### Data source: silver, plus bronze freshness
 
-Reports read `bsky_silver.*`, never bronze's raw JSON payloads. Pages aggregate in SQL: the extracted results ship to the browser, so each query's result must stay small (hundreds to low thousands of rows, never raw records).
+Reports read `bsky_silver.*`, never bronze's raw JSON payloads. The one exception (added 2026-11-06) is the health page's bronze freshness tile: `max(ingested_at)` over the last two days' partitions of `bsky_raw.jetstream`, so `bsky-reports` can read bronze too. Pages aggregate in SQL: the loaders' output ships to the browser, so each query's result must stay small (hundreds to low thousands of rows, never raw records).
 
 ### Build and hosting
 
-- **Build:** a CronJob `reports` in the `bsky` namespace (apps stack) runs the Evidence build hourly after silver, at `:30` (silver runs at `:05` and takes about 5 minutes once caught up). On demand: `kubectl -n bsky create job --from=cronjob/reports reports-manual-$(date +%s)`.
+- **Build:** a CronJob `reports` in the `bsky` namespace (apps stack) runs the Framework build hourly after silver, at `:30` (silver runs at `:05` and takes about 5 minutes once caught up). On demand: `kubectl -n bsky create job --from=cronjob/reports reports-manual-$(date +%s)`.
 - **Serving:** private. Access is by `kubectl port-forward` (decided). No public endpoint, no Ingress, no load balancer. The build writes the site somewhere a small nginx pod serves it from; where is decided in R3.
 
 ### Identity
@@ -75,7 +78,7 @@ A dedicated read-only role, rather than borrowing a pipeline role:
 
 | Stack | Resource |
 |---|---|
-| data (`infra/`) | role `bsky-reports` via `bsky_iam`, trusted by `pods.eks.amazonaws.com`: S3 `GetObject` and `ListBucket` on `iceberg/bsky_silver/*` in the warehouse bucket; Glue `GetCatalog`, `GetDatabase(s)` and `GetTable(s)` on the catalog and `bsky_silver` |
+| data (`infra/`) | role `bsky-reports` via `bsky_iam`, trusted by `pods.eks.amazonaws.com`: S3 `GetObject` and `ListBucket` on `iceberg/bsky_silver/*` and `iceberg/bsky_raw/*` in the warehouse bucket; Glue `GetCatalog`, `GetDatabase(s)` and `GetTable(s)` on the catalog, `bsky_silver` and `bsky_raw` |
 | platform (`infra/platform/`) | Pod Identity association for service account `reports` |
 | apps (`infra/apps/`) | service account `reports`, the CronJob, and the serving Deployment + ClusterIP Service |
 
@@ -91,7 +94,7 @@ Changes go through Pulumi, in the order data → platform → apps.
   - DuckDB's `credential_chain` picked up EKS Pod Identity credentials directly, with no boto3 shim.
   - A first attempt borrowed the silver job's role and got HTTP 403 from Glue's Iceberg REST `/iceberg/v1/config`: that endpoint needs `glue:GetCatalog`, which silver's role lacks. Running as `reports` (`bsky-reports`, which has it), the `ATTACH` succeeded.
   - Timings, just after the optimizers were enabled: `silver_runs` totals **0.8 s**, posts per day **7.9 s**, both under R1's proposed 10 s threshold.
-  - Python DuckDB needs `pytz` to fetch timestamp columns; irrelevant to Evidence, which uses the Node package.
+  - Python DuckDB needs `pytz` to fetch timestamp columns (it's a dependency of `reports/`).
 
 ## WP R1: access and in-cluster spike
 
@@ -103,7 +106,7 @@ Changes go through Pulumi, in the order data → platform → apps.
   - **Data stack (done):** role `bsky-reports` and its policy as in [Identity](#identity), through `bsky_iam`, with a mock test that it is read-only (no S3 writes, no Glue writes).
   - **Platform stack (done):** Pod Identity association for `bsky/reports`.
   - **Apps stack (done):** service account `reports` (the CronJob comes in R3).
-  - **Spike:** a throwaway pod as `reports` with DuckDB 1.4 (Python or the CLI, matching the version Evidence uses). Run the two test queries (`silver_runs` totals, posts per day) plus one `likes` aggregate, cold and warm, and record:
+  - **Spike:** a throwaway pod as `reports` with DuckDB 1.4 (Python, as the loaders use). Run the two test queries (`silver_runs` totals, posts per day) plus one `likes` aggregate, cold and warm, and record:
     - wall time per query, and how much of it is `ATTACH` and metadata;
     - S3 objects per table before and after the optimizers' first runs;
     - whether the optimizers rewrite manifests (manifests per snapshot over a day).
@@ -124,8 +127,12 @@ Changes go through Pulumi, in the order data → platform → apps.
 ## WP R2: reports project
 
 - **Depends on:** R1 for the in-cluster role, though development can start in parallel against the lake from a laptop. S3 for the content pages (below), not for the health page.
-- **Goal:** a `reports/` Evidence project that builds locally, against a fixture and against the lake.
-- **Tasks:**
+- **Goal:** a `reports/` project that builds locally, against a fixture and against the lake.
+- **Status (2026-11-06):** scaffolded on Framework; the pipeline health page builds from the fixture and from the lake (numbers match Athena), with tests. Open: the activity and languages pages, rendering `silver/sql/` views into the loaders, and the bronze read grant applied in the data stack.
+- **Decided:**
+  - **`ATTACH`:** `reports/lib/lake.py` connects once per loader: `CREATE SECRET` (credential chain) and `ATTACH` of the Glue catalog, account ID from `BSKY_AWS_ACCOUNT_ID`. SQL files name `{silver}` and `{bronze}` and never the catalog.
+  - **Fixture:** one code path switched by `BSKY_REPORTS_FIXTURE=1`, which builds in-memory tables with the lake's names and columns (`reports/lib/fixture.py`). `npm test` builds from it.
+- **Tasks (as planned for Evidence; the Framework equivalents are in `reports/CLAUDE.md`):**
   - Scaffold an Evidence project in `reports/` (Node; pin Evidence and `@evidence-dev/duckdb`, commit the lockfile). Add a `reports/CLAUDE.md` with commands and gotchas, as the other subprojects have.
   - **Source:** a DuckDB source that runs the `CREATE SECRET` and `ATTACH` above, with the account ID and region from env vars (add them to `.env.example`). Source queries are `.sql` files, one per dataset, each aggregating.
     - **Decide:** how the source runs the `ATTACH`: through the DuckDB connector's initialization, or a prelude in each source query. Pick whichever the connector supports cleanly, and record it.
@@ -137,7 +144,7 @@ Changes go through Pulumi, in the order data → platform → apps.
     - **Cost:** S3's views scan whole tables, because "latest version per `uri`" can't be pruned by `day`. Over every post (15M+ and growing) on every hourly build, that will eventually break the 5-minute build threshold and could exhaust the build pod's memory. So pages must not aggregate over all of `posts_current`. Either restrict it to a bounded date range (e.g. the last 30 days, filtering `posts` by `day` before the latest-version step), or read daily aggregates maintained incrementally, such as a small table silver writes per window (one of R1's levers).
     - **Decide:** which of the two, per page. Record it in this WP.
   - **View definitions:** S3's views are SQL templates in `silver/sql/`, rendered by `bsky_silver.views` (`python -m bsky_silver.views <namespace>` prints them). The reports source must generate its views from those files, for example a build step that renders them into the source's prelude, rather than copy them, so there is one definition.
-  - **Local build:** document in `reports/CLAUDE.md` how to build against the lake from a laptop (export SSO credentials as in the repo `CLAUDE.md`, then `npm run sources && npm run build`), and that it is slow from outside the region (see [Measurements](#measurements-so-far)).
+  - **Local build:** document in `reports/CLAUDE.md` how to build against the lake from a laptop (export SSO credentials as in the repo `CLAUDE.md`, then `npm run build`), and that it is slow from outside the region (see [Measurements](#measurements-so-far)).
   - **Tests:** a build against a small local fixture (Parquet or a DuckDB file with the silver schema, no AWS access), so CI can check that pages compile and queries run.
     - **Decide:** whether one source switches between the lake and the fixture by env var, or the fixture is a second source.
 - **Acceptance:**
@@ -148,7 +155,7 @@ Changes go through Pulumi, in the order data → platform → apps.
 ## WP R3: deploy
 
 - **Depends on:** R1, R2.
-- **Image:** `reports/Dockerfile` on a Node base, running `npm run sources && npm run build` as a non-root user. Multi-arch, pushed to a new ECR repo `bsky/reports` (platform stack), tagged with the short commit hash like the other images.
+- **Image:** `reports/Dockerfile` on a Node base with Python and uv added (the loaders), running `npm run build` as a non-root user. Preinstall DuckDB's `httpfs` and `iceberg` extensions in the image rather than downloading them on every build, and note that Framework fetches its `npm:` imports at build time (or vendor them). Multi-arch, pushed to a new ECR repo `bsky/reports` (platform stack), tagged with the short commit hash like the other images.
 - **CronJob `reports`** (apps stack): `:30` hourly, service account `reports`, `concurrencyPolicy: Forbid`, `backoffLimit: 2`, `activeDeadlineSeconds` under an hour. Region and account ID from config, image tag from `reportsImageTag`.
 - **Serving:** a Deployment `reports-web` (nginx, one replica) with a ClusterIP Service.
   - **Decide:** where the built site lives:
@@ -172,7 +179,7 @@ Changes go through Pulumi, in the order data → platform → apps.
 
 ## Follow-on: pages over classification and embeddings
 
-Once C2/C3 exist, C3's report (daily topic shares, spam/adult rates, agreement with Bluesky's labels) can be Evidence pages in `reports/`, reading C3's threshold views, instead of a separate script or notebook. Pages built on embeddings (E2) could follow. Neither is planned in detail yet.
+Once C2/C3 exist, C3's report (daily topic shares, spam/adult rates, agreement with Bluesky's labels) can be pages in `reports/`, reading C3's threshold views, instead of a separate script or notebook. Pages built on embeddings (E2) could follow. Neither is planned in detail yet.
 
 ## Costs
 

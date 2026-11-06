@@ -1,0 +1,17 @@
+[project]
+name = "bsky-reports"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "duckdb==1.4.*",
+    "pyarrow>=26.0.1",
+    "pytz>=2026.6",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["lib"]

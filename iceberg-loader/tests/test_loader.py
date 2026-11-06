@@ -96,3 +96,24 @@ def test_already_loaded_check_spans_each_hour_in_the_batch(loader, tmp_path):
     loader.load([a, b])
     # Both hours, on different days, must be checked for duplicates.
     assert loader.load([a, b]) == []
+
+
+def test_manifest_list_is_readable_by_athena(loader, tmp_path):
+    # Sail 0.7.2 wrote manifest lists without the header metadata and with the partition
+    # summary record named field_summary; Athena failed to plan any snapshot the loader
+    # committed (GENERIC_INTERNAL_ERROR ... GenericData$Record, 2026-11-05). 0.7.3 writes them
+    # like Iceberg Java does.
+    import json
+
+    import fastavro
+
+    loader.load([write_raw_file(tmp_path / "src/f1.parquet", [utc(2026, 10, 22, 6, 30)])])
+    metadata = max((tmp_path / "table/metadata").glob("*.metadata.json"), key=lambda p: p.stat().st_mtime)
+    table = json.loads(metadata.read_text())
+    (snapshot,) = [s for s in table["snapshots"] if s["snapshot-id"] == table["current-snapshot-id"]]
+    with open(snapshot["manifest-list"].removeprefix("file://"), "rb") as f:
+        reader = fastavro.reader(f)
+        assert {"format-version", "snapshot-id", "sequence-number"} <= set(reader.metadata)
+        (partitions,) = [field for field in reader.writer_schema["fields"] if field["name"] == "partitions"]
+        summary = partitions["type"][1]["items"]
+        assert summary["name"] == "r508"

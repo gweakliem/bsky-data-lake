@@ -114,7 +114,7 @@ Glue table optimizers log to `/aws-glue/iceberg-compaction/logs`, `/aws-glue/ice
 
 ## Athena
 
-Choose the **`bsky`** workgroup in the query editor. It writes results to the stack's results bucket, where they expire after 7 days. Both databases, `bsky_raw` and `bsky_silver`, come from the Glue catalog. Queries cost $5 per TB scanned; `silver_runs` and queries answered from Iceberg metadata cost almost nothing.
+Choose the **`bsky`** workgroup in the query editor. It writes results to the stack's results bucket, where they expire after 7 days. Both databases, `bsky_raw` and `bsky_silver`, come from the Glue catalog. If a bronze query fails with `GENERIC_INTERNAL_ERROR` before scanning anything, the loader is writing manifest lists Athena can't read (Sail 0.7.2 did; see `iceberg-loader/CLAUDE.md`); `SELECT max(committed_at) FROM bsky_raw."jetstream$snapshots"` still works for freshness. Queries cost $5 per TB scanned; `silver_runs` and queries answered from Iceberg metadata cost almost nothing.
 
 ```sql
 -- Silver progress: one row per committed window

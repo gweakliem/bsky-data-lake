@@ -85,6 +85,11 @@ def connect() -> tuple[duckdb.DuckDBPyConnection, dict[str, str]]:
     # In a container DuckDB sizes itself from the node's memory, not the pod's limit.
     if limit := os.environ.get("BSKY_DUCKDB_MEMORY_LIMIT"):
         con.execute(f"SET memory_limit = '{limit}'")
+    if threads := os.environ.get("BSKY_DUCKDB_THREADS"):
+        con.execute(f"SET threads = {int(threads)}")
+    # The queries aggregate, so row order only matters where they ORDER BY; this
+    # lets large operators (posts_current's window) spill more freely.
+    con.execute("SET preserve_insertion_order = false")
     if temp := os.environ.get("BSKY_DUCKDB_TEMP_DIR"):
         con.execute(f"SET temp_directory = '{temp}'")
     if os.environ.get("BSKY_REPORTS_FIXTURE"):

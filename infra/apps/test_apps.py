@@ -178,7 +178,8 @@ def test_reports_cronjob():
         env = {e["name"]: e["value"] for e in container["env"]}
         assert env["BSKY_AWS_ACCOUNT_ID"] == "123456789012"
         # DuckDB's own limit must sit below the pod's.
-        assert env["BSKY_DUCKDB_MEMORY_LIMIT"] == "2GB" and container["resources"]["limits"]["memory"] == "4Gi"
+        assert env["BSKY_DUCKDB_MEMORY_LIMIT"] == "6GB" and container["resources"]["limits"]["memory"] == "8Gi"
+        assert env["BSKY_DUCKDB_THREADS"] == "4"
         assert not any(k.startswith("AWS_ACCESS") or k.startswith("AWS_SECRET") for k in env)
 
     return apps.reports_build.spec.apply(check)

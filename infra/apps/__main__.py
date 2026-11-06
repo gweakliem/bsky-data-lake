@@ -259,8 +259,11 @@ reports_image_tag = config.require("reportsImageTag")
 reports_image = repository_urls.apply(lambda urls: f"{urls['reports']}:{reports_image_tag}")
 reports_site_url = data.require_output("reports_site_url")
 # DuckDB sizes itself from the node's memory, so its limit is set below the pod's.
-reports_memory_limit = config.get("reportsMemoryLimit") or "4Gi"
-reports_duckdb_memory = config.get("reportsDuckdbMemory") or "2GB"
+# posts_current's window over 14 days of posts (about 50M rows) is the largest
+# operator: languages ran out of memory at 4GB and fits in 6GB (2026-11-06).
+reports_memory_limit = config.get("reportsMemoryLimit") or "8Gi"
+reports_duckdb_memory = config.get("reportsDuckdbMemory") or "6GB"
+reports_duckdb_threads = config.get("reportsDuckdbThreads") or "4"
 nginx_image = config.get("nginxImage") or "nginxinc/nginx-unprivileged:1.29.3-alpine"
 # The ATTACH names the catalog by account ID; the role ARN carries it.
 account_id = data.require_output("reports_role_arn").apply(lambda arn: arn.split(":")[4])
@@ -297,10 +300,11 @@ reports_build = k8s.batch.v1.CronJob(
                                     k8s.core.v1.EnvVarArgs(name="AWS_REGION", value=region),
                                     k8s.core.v1.EnvVarArgs(name="BSKY_AWS_ACCOUNT_ID", value=account_id),
                                     k8s.core.v1.EnvVarArgs(name="BSKY_DUCKDB_MEMORY_LIMIT", value=reports_duckdb_memory),
+                                    k8s.core.v1.EnvVarArgs(name="BSKY_DUCKDB_THREADS", value=reports_duckdb_threads),
                                     k8s.core.v1.EnvVarArgs(name="BSKY_DUCKDB_TEMP_DIR", value="/scratch/duckdb"),
                                 ],
                                 resources=k8s.core.v1.ResourceRequirementsArgs(
-                                    requests={"cpu": "1", "memory": reports_memory_limit},
+                                    requests={"cpu": "2", "memory": reports_memory_limit},
                                     limits={"memory": reports_memory_limit},
                                 ),
                                 volume_mounts=[k8s.core.v1.VolumeMountArgs(name="scratch", mount_path="/scratch")],

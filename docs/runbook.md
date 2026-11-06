@@ -35,6 +35,7 @@ The cluster API only accepts the addresses in `BSKY_EKS_PUBLIC_CIDRS` (`.env`). 
 | ingestor | Deployment `ingestor` | `bsky` namespace | a raw Parquet file lands in `s3://<raw-bucket>/jetstream/` every minute or so |
 | loader | Deployment `iceberg-loader` | `bsky` namespace | the queue `bsky-raw-files` stays near empty; bronze `ingested_at` is minutes old |
 | silver | CronJob `silver`, `:05` hourly | `bsky` namespace | `silver_runs.bronze_through` trails bronze by about an hour at most |
+| reports | CronJob `reports`, `:30` hourly; Deployment `reports-web` | `bsky` namespace | the site's "Built" line is under an hour old (see [Reports](#reports)) |
 | log shipping | DaemonSet (Fluent Bit) | `logging` namespace | new lines appear in `/bsky/containers` |
 | table maintenance | Glue table optimizers | Glue console, per table | runs show as succeeded in the table's optimization history |
 
@@ -92,7 +93,7 @@ Nothing alarms on failed silver Jobs yet. Check them in the daily check.
 Fluent Bit ships everything in the `bsky` namespace to the log group `/bsky/containers`, kept for 14 days, with one stream per `<pod>.<container>` (for example `silver-29895245-ml77h.silver`).
 
 ```bash
-aws logs tail /bsky/containers --log-stream-name-prefix silver- --follow    # or ingestor-, iceberg-loader-
+aws logs tail /bsky/containers --log-stream-name-prefix silver- --follow    # or ingestor-, iceberg-loader-, reports-
 aws logs tail /bsky/containers --since 1h --filter-pattern ERROR
 ```
 
@@ -149,9 +150,22 @@ kubectl -n bsky create job --from=cronjob/silver silver-manual-$(date +%s)
 
 **Pause it:** `kubectl -n bsky patch cronjob silver -p '{"spec":{"suspend":true}}'`. The next apps-stack `pulumi up` undoes this.
 
+## Reports
+
+The report site (`reports/`: pipeline health, activity, languages) is built hourly at `:30` by the CronJob `reports`, which queries the lake with DuckDB, builds the static site and uploads it to `s3://<warehouse>/reports/builds/<time>/`, then points `reports/current` at it (the last 3 builds are kept). The Deployment `reports-web` serves it: a `sync` sidecar checks `reports/current` every minute and swaps in a new build, and nginx serves the local copy. A failed build exits non-zero before uploading anything, so the previous site stays up.
+
+```bash
+kubectl -n bsky port-forward svc/reports-web 8080:80     # then open http://localhost:8080
+kubectl -n bsky create job --from=cronjob/reports reports-manual-$(date +%s)   # build now
+kubectl -n bsky logs job/<job-name> -f                   # the build's output
+kubectl -n bsky logs deploy/reports-web -c sync          # "serving build ..." when a new build is picked up
+```
+
+Nothing is exposed outside the cluster (ClusterIP only). The page header says when the build ran; if it's over an hour old, check the latest `reports-` Job's logs (`kubectl -n bsky get jobs`, or `aws logs tail /bsky/containers --log-stream-name-prefix reports-`).
+
 ## Deploy a new image
 
-Images are tagged with the short commit hash. ECR repos: `bsky/ingest` (built from the repo root), `bsky/iceberg-loader` (from `iceberg-loader/`) and `bsky/silver` (from `silver/`).
+Images are tagged with the short commit hash. ECR repos: `bsky/ingest` (built from the repo root), `bsky/iceberg-loader` (from `iceberg-loader/`) `bsky/silver` (from `silver/`) and `bsky/reports` (from `reports/`, which also needs silver's SQL: add `--build-context silver=silver`).
 
 ```bash
 REG=<account-id>.dkr.ecr.us-west-2.amazonaws.com
@@ -160,7 +174,7 @@ aws ecr get-login-password | docker login --username AWS --password-stdin $REG
 docker buildx build --platform linux/amd64,linux/arm64 -t $REG/bsky/silver:$TAG --push silver
 
 cd infra/apps
-pulumi config set --stack dev silverImageTag $TAG      # or loaderImageTag, ingestImageTag
+pulumi config set --stack dev silverImageTag $TAG      # or loaderImageTag, ingestImageTag, reportsImageTag
 pulumi preview --stack dev                             # check that only the expected image changes
 pulumi up --stack dev
 ```

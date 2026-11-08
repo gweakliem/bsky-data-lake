@@ -75,6 +75,7 @@ Alarms and budget alerts go to the SNS topic `bsky-alerts`, which emails `BSKY_A
 |---|---|---|
 | `bsky-ingest-stalled` | no raw-file notifications for 15 min | ingestor pod status and logs. It resumes from its newest file on restart, so a restart replays the gap. |
 | `bsky-loader-behind` | the oldest queued notification is over 15 min old | loader pod status and logs: OOM kills, Glue commit errors, S3 permission errors. |
+| `bsky-silver-stalled` | no silver window committed in two clock hours (metric `bsky/SilverWindowsCommitted`, from silver's `run <id>: bronze (...]` log lines) | `kubectl -n bsky get jobs`, then the failed Job's logs (or `aws logs tail /bsky/containers --log-stream-name-prefix silver-`): OOM kills, Sail errors, commit conflicts past the retries. Silver resumes from `silver_runs`, so the next good run catches up. |
 | `bsky-dead-letters` | anything in `bsky-raw-files-dlq` | a file or notification failed 5 times. Read the message (below) and the loader logs from that time. |
 
 Read dead letters without removing them:
@@ -86,7 +87,7 @@ aws sqs receive-message --queue-url "$DLQ" --max-number-of-messages 10 --visibil
 
 An `s3:TestEvent` message is S3 confirming a notification config change, not a failure; delete it. After fixing the cause of real failures, redrive them to the main queue with `aws sqs start-message-move-task --source-arn <dlq-arn>`. The loader skips files that are already in bronze, so a redrive doesn't duplicate rows.
 
-Nothing alarms on failed silver Jobs yet. Check them in the daily check.
+One failed silver run doesn't alarm when the next hour's run succeeds; the daily check catches repeated single failures.
 
 ## Logs
 

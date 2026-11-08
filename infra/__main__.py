@@ -704,6 +704,43 @@ poison_messages = _queue_alarm(
     treat_missing_data="notBreaching",
 )
 
+# Silver logs one line per committed window ("bsky_silver.job: run <id>: bronze
+# (...], N row(s), appended {...}"), and only silver logs as bsky_silver.job, so
+# the filter needs no log-stream selection. Bronze always grows, so every hourly
+# run commits at least one window, and a long catch-up commits one every few
+# minutes. Two clock hours without one means two runs in a row failed, hung or
+# never started; a single failed run that the next one recovers doesn't alarm.
+SILVER_METRIC_NAMESPACE = "bsky"
+silver_windows = aws.cloudwatch.LogMetricFilter(
+    "silver-windows",
+    name="bsky-silver-windows",
+    log_group_name=container_logs.name,
+    pattern='"bsky_silver.job: run" "row(s), appended"',
+    metric_transformation=aws.cloudwatch.LogMetricFilterMetricTransformationArgs(
+        namespace=SILVER_METRIC_NAMESPACE,
+        name="SilverWindowsCommitted",
+        value="1",
+        default_value="0",
+    ),
+)
+silver_stalled = aws.cloudwatch.MetricAlarm(
+    "silver-stalled",
+    name="bsky-silver-stalled",
+    alarm_description="No silver window committed in two clock hours: silver runs are failing, hung or not starting",
+    namespace=SILVER_METRIC_NAMESPACE,
+    metric_name="SilverWindowsCommitted",
+    statistic="Sum",
+    period=3600,
+    evaluation_periods=2,
+    comparison_operator="LessThanThreshold",
+    threshold=1,
+    # No log lines at all (Fluent Bit or the cluster down) is no news either.
+    treat_missing_data="breaching",
+    alarm_actions=[alerts.arn],
+    ok_actions=[alerts.arn],
+    opts=pulumi.ResourceOptions(depends_on=[silver_windows]),
+)
+
 # Account-wide: filtering by the project tag would need cost allocation tags
 # activated by an admin.
 budget = aws.budgets.Budget(

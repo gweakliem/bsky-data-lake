@@ -305,7 +305,7 @@ def test_raw_files_expire_after_a_week():
 def test_pipeline_alarms_notify_the_alert_topic():
     def check(topic_arn):
         alarms = {a["name"]: a for a in mocks.by_type["aws:cloudwatch/metricAlarm:MetricAlarm"]}
-        assert sorted(alarms) == ["bsky-dead-letters", "bsky-ingest-stalled", "bsky-loader-behind"]
+        assert sorted(alarms) == ["bsky-dead-letters", "bsky-ingest-stalled", "bsky-loader-behind", "bsky-silver-stalled"]
         for a in alarms.values():
             assert a["alarmActions"] == [topic_arn] and a["okActions"] == [topic_arn]
         stalled = alarms["bsky-ingest-stalled"]
@@ -314,6 +314,12 @@ def test_pipeline_alarms_notify_the_alert_topic():
         assert stalled["treatMissingData"] == "breaching"
         assert alarms["bsky-dead-letters"]["dimensions"] == {"QueueName": "bsky-raw-files-dlq"}
         assert alarms["bsky-loader-behind"]["threshold"] == 900
+        silver = alarms["bsky-silver-stalled"]
+        (metric_filter,) = mocks.by_type["aws:cloudwatch/logMetricFilter:LogMetricFilter"]
+        transformation = metric_filter["metricTransformation"]
+        assert (silver["namespace"], silver["metricName"]) == (transformation["namespace"], transformation["name"])
+        assert metric_filter["logGroupName"] == "/bsky/containers"
+        assert (silver["period"], silver["evaluationPeriods"], silver["treatMissingData"]) == (3600, 2, "breaching")
         (sub,) = mocks.by_type["aws:sns/topicSubscription:TopicSubscription"]
         assert (sub["protocol"], sub["endpoint"]) == ("email", "alerts@example.com")
 

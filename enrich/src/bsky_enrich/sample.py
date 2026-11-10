@@ -52,6 +52,8 @@ def draw(con, day: str, seed: float = 0.42) -> list[dict]:
                 reply_root_uri, tags, self_labels
             FROM {s}.posts
             WHERE day = DATE '{day}' AND operation = 'create'
+                -- Posts already deleted can't be checked on bsky.app; later deletes still get through.
+                AND uri NOT IN (SELECT uri FROM {s}.deletes WHERE day >= DATE '{day}' AND collection = 'app.bsky.feed.post')
                 AND list_has_any(list_transform(langs, l -> lower(split_part(l, '-', 1))), ['en'])
                 AND {spec.ELIGIBLE_SQL}
         )

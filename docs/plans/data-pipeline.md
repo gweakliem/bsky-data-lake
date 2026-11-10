@@ -168,6 +168,20 @@ Prerequisite for unattended running and for D4.
     - Topics `art` (art and creative work, now under `entertainment`) and `gaming` (video and board games, also under `entertainment`).
     - Game result shares (Wordle, Connections, Strands grids) aren't spam: the poster isn't promoting anything, and the virality is the game's share button. Label them not spam (topic `entertainment`, or none). They're templated, so code can recognize them by pattern (`game_share`) rather than Jev, and they could be skipped to save cost. Check in the eval whether Jev's `spam` leans yes on them ("repetitive automated content" is in its criteria).
   - **Cost:** about 1,700 input tokens a request with the eval's order check, about $70 per million posts at $0.042/Mtok. All eligible posts would be about $200 a day, so C2 classifies a sample (see C2).
+- **Open: what classification is for (raised 2026-11-10, after hand-labeling ~220 posts).** Undecided; settle this before finishing C1's thresholds.
+  - **What labeling showed:**
+    - Topics overlap in practice (politics and social issues often both apply).
+    - Some lines, such as art versus entertainment, are hard to draw.
+    - Labeling mistakes get noticed too late. The labeler now has a back key.
+    - Non-English posts (about 40%) can't be hand-labeled, so Jev's accuracy on them can't be measured.
+  - **Two kinds of question, which may want different tools:**
+    - **Per-post judgments that something acts on**, such as keeping spam or adult posts out of reports and search. Precision on each post matters, there are only a few questions, and Jev fits well.
+    - **Aggregate trends**, such as which topics are rising. Errors on single posts average out, so a fixed taxonomy may be the wrong tool. Clustering post embeddings finds topics without anyone defining or labeling them, covers every language, and costs much less per post. Jev could name the clusters, or answer narrow questions about them.
+  - **The option on the table:** shrink C1 to spam, adult and maybe humor, and move topics to embedding clusters. That would bring topic clustering into scope (see Goal), and C3's daily topic shares would come from clusters instead.
+  - **If topics stay in Jev:**
+    - Overlap argues for one Noul per topic instead of a single Choice, which is TypeSafe's guidance when several labels can apply. That costs one question per topic.
+    - A category line only needs to exist where something downstream treats the two sides differently, and that use defines where it goes.
+  - **Label noise:** re-label about 30 posts later without seeing the first answers. How often the two passes agree caps the accuracy the eval can show for Jev.
 - **Goal:** a versioned question set and a labeled evaluation set, before any bulk spend.
 - **Questions (one System One request per post):**
 
@@ -244,6 +258,7 @@ Prerequisite for unattended running and for D4.
 - **Text to embed (`text_spec` v1):** post text, plus image alt texts, plus the external link title. Never include reply parent text, which pulls vectors toward the parent's topic.
 - **Evaluation:**
   - ~50 search queries written by hand, with relevant posts judged from silver.
+  - Include non-English queries and judged posts. If every query is English, the model's quality on the roughly 40% of posts that aren't English goes unmeasured, which is the same gap C1's eval has. Judging them needs translation or a reader of the language.
   - Measure recall@10 and nDCG@10 per model, plus throughput (posts/sec) on the target hardware, and storage per vector.
 - **Deliverable:** `docs/plans/notes/embedding-eval.md` with the choice, its dimension, and the hardware it needs. That hardware sizes the node pool in D5.
 - **Acceptance:** the chosen model and `text_spec` are recorded with their measurements.

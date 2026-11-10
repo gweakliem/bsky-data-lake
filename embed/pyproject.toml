@@ -1,0 +1,31 @@
+[project]
+name = "bsky-embed"
+version = "0.1.0"
+description = "Embedding model selection (E1) and, later, the embedding job (E2)"
+authors = [
+    { name = "Gordon Weakliem", email = "gordon.weakliem@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "bm25s>=0.3.16",
+    "bsky-enrich",
+    "einops>=0.8.2",
+    "httpx>=0.28.1",
+    "numpy>=2.5.4",
+    "python-dotenv>=1.2.4",
+    "scikit-learn>=1.9.1",
+    "sentence-transformers>=6.2.0",
+    "torch>=2.15.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
+
+[tool.uv.sources]
+bsky-enrich = { path = "../enrich", editable = true }

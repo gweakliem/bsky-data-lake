@@ -255,6 +255,7 @@ Prerequisite for unattended running and for D4.
 ## WP E1: embedding model selection
 
 - **Depends on:** S2.
+- **Status: in progress (2026-11-10).** `embed/` has the harness (see `embed/CLAUDE.md`) and a first run: 100k posts of 2026-11-09 in every language, 9 models plus BM25 and truncated variants, 48 queries, relevance judged by Jev over the pooled top 10s ($0.05), and a k-means clustering check, which the plan didn't originally include. First results: Qwen3-8B via OpenRouter scores best everywhere (nDCG@10 0.93; 0.92 truncated to 1,024 dims; about $1.30 a day for all eligible posts). nomic-embed-text-v2-moe is the strongest local model (0.87, 77 posts/s on 4 CPU threads) and barely clusters by language, while harrier and e5 group many non-English posts by language. Next: hand-judge 150 pairs to check Jev, then the write-up and the choice.
 - **Goal:** pick a model and a text-preparation scheme using measured search quality, not defaults.
 - **Candidates:**
   - small open multilingual embedding models that run well on CPU or a single small GPU;

@@ -1,5 +1,9 @@
 config:
   aws:region: us-west-2
+  aws:defaultTags:
+    tags:
+      project: bsky-data-lake
+      stack: data
   # Bucket names are read from BSKY_BUCKET / BSKY_WAREHOUSE_BUCKET in the repo's
   # .env so they aren't committed; set bsky-data-lake:bucket /
   # bsky-data-lake:warehouseBucket to override.

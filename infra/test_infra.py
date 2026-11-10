@@ -355,7 +355,7 @@ def test_silver_reads_bronze_and_writes_only_silver():
 def test_athena_workgroup_writes_to_its_own_bucket():
     def check(name):
         assert name == "bsky-athena-results-123456789012-us-west-2-an"
-        (bucket,) = mocks.by_type["aws:s3/bucket:Bucket"]
+        (bucket,) = [b for b in mocks.by_type["aws:s3/bucket:Bucket"] if b["bucket"] == name]
         assert bucket["bucketNamespace"] == "account-regional"
         (block,) = mocks.by_type["aws:s3/bucketPublicAccessBlock:BucketPublicAccessBlock"]
         assert block["bucket"] == name
@@ -398,3 +398,15 @@ def test_reports_read_only_lake():
         assert arn == "arn:aws:iam::123456789012:role/bsky/bsky-reports"
 
     return pulumi.Output.all(infra.reports_policy_document, infra.reports_role.arn).apply(check)
+
+
+@pulumi.runtime.test
+def test_existing_buckets_are_adopted_for_tags_and_never_deleted():
+    def check(_):
+        buckets = {b["bucket"]: b for b in mocks.by_type["aws:s3/bucket:Bucket"]}
+        assert {b["tags"]["component"] for name, b in buckets.items() if not name.startswith("bsky-athena")} == {"raw", "warehouse"}
+        for name in ("test-bucket", "test-warehouse"):
+            # Nothing but the name, namespace and tags, so the import changes nothing else.
+            assert set(buckets[name]) - {"tagsAll", "arn", "id", "urn"} == {"bucket", "bucketNamespace", "tags"}, buckets[name]
+
+    return pulumi.Output.all(*[b.urn for b in infra.existing_buckets.values()]).apply(check)

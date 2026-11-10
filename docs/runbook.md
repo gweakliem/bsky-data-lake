@@ -89,6 +89,10 @@ An `s3:TestEvent` message is S3 confirming a notification config change, not a f
 
 One failed silver run doesn't alarm when the next hour's run succeeds; the daily check catches repeated single failures.
 
+## Costs
+
+The budget `bsky-monthly` emails at 50/80/100% of its monthly limit; it's account-wide. Resources are tagged `project=bsky-data-lake` and `stack=data|platform`, and EKS's nodes `aws:eks:cluster-name=bsky`. Cost Explorer groups by those (and `component`, below) only after an admin activates them under Billing → Cost allocation tags (once; it takes up to a day, and a backfill of earlier months longer). The raw and warehouse buckets are also tagged `component=raw` and `component=warehouse`, so their costs split apart. The Pulumi state bucket is the one untagged bucket.
+
 ## Logs
 
 Fluent Bit ships everything in the `bsky` namespace to the log group `/bsky/containers`, kept for 14 days, with one stream per `<pod>.<container>` (for example `silver-29895245-ml77h.silver`).

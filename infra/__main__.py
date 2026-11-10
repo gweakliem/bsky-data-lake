@@ -1,7 +1,7 @@
 """AWS resources for the Bluesky data lake.
 
-The raw-file bucket and the warehouse bucket already exist and are not managed
-here; this stack wires the raw bucket's ObjectCreated notifications to the
+The raw-file bucket and the warehouse bucket predate this stack. It adopts them
+(imported and protected, for their tags only) and never deletes them; it wires the raw bucket's ObjectCreated notifications to the
 queue the Iceberg loader consumes and creates the Glue database the raw
 Iceberg table lives in, located in the warehouse bucket. Athena's results
 bucket is the one bucket it creates.
@@ -56,6 +56,23 @@ region = aws.get_region_output().region
 bucket_arn = f"arn:aws:s3:::{bucket}"
 warehouse_bucket_arn = f"arn:aws:s3:::{warehouse_bucket}"
 warehouse = f"s3://{warehouse_bucket}/iceberg"
+
+# --- The pre-existing buckets: adopted for cost-allocation tags only ---
+
+# Imported rather than created, protected, and kept if they ever leave the code.
+# In provider v7 a Bucket is only the bucket and its tags; its notification and
+# lifecycle stay with their own resources below.
+existing_buckets = {
+    component: aws.s3.Bucket(
+        f"{component}-bucket",
+        bucket=name,
+        # Like Athena's results bucket, they're in the account-regional namespace (-an).
+        bucket_namespace="account-regional",
+        tags={"component": component},
+        opts=pulumi.ResourceOptions(import_=name, protect=True, retain_on_delete=True),
+    )
+    for component, name in {"raw": bucket, "warehouse": warehouse_bucket}.items()
+}
 
 # --- SQS: S3 notifications for raw files, with a dead-letter queue ---
 

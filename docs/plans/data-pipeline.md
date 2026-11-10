@@ -155,6 +155,19 @@ Prerequisite for unattended running and for D4.
 ## WP C1: classification spec and evaluation set
 
 - **Depends on:** S2 (needs real posts).
+- **Status: in progress (2026-11-10).** `enrich/` has the spec, a 300-post sample of 2026-11-09 and the labeling and eval tools; the hand labels are next. See `enrich/CLAUDE.md`.
+- **Decided so far:**
+  - **Topics:** `politics`, `social_issues`, `news` (current events no other topic covers), `crime_justice`, `sports`, `tech`, `science`, `entertainment`, `business`, `personal`. The no-match case is a companion Noul `topic_fits`, not an `other` option, per TypeSafe's guidance. Posts can fairly have two topics, so a label may name a second acceptable one, and the eval accepts either.
+  - **Humor:** a fifth question, a Noul for joke, sarcasm or snark. Much of Bluesky is, especially in threads, and it's a tone across topics rather than a topic.
+  - **Thread context:** replies carry the thread root's text as well as the parent's. Without it, a reply in a thread about a trial couldn't be placed at all.
+  - **Short posts aren't classified:** no link, and text, alt texts and link title under 21 characters together (about 17% of new posts). The sample is drawn from eligible posts only, so the thresholds fit what C2 will classify.
+  - **No handles in the state:** Jetstream's identity events mostly omit them, so silver has almost none. Display names (from `profiles`) and reply-parent and quoted text are included where silver has them.
+  - **No Bluesky moderation labels:** labeler labels aren't in Jetstream, so the `adult` comparison column is the poster's self-labels.
+  - **English only in v1's eval set:** it's hand-labeled. Other languages are unmeasured.
+  - **Candidates for v2 (noted, not added):**
+    - Topics `art` (art and creative work, now under `entertainment`) and `gaming` (video and board games, also under `entertainment`).
+    - Game result shares (Wordle, Connections, Strands grids) aren't spam: the poster isn't promoting anything, and the virality is the game's share button. Label them not spam (topic `entertainment`, or none). They're templated, so code can recognize them by pattern (`game_share`) rather than Jev, and they could be skipped to save cost. Check in the eval whether Jev's `spam` leans yes on them ("repetitive automated content" is in its criteria).
+  - **Cost:** about 1,700 input tokens a request with the eval's order check, about $70 per million posts at $0.042/Mtok. All eligible posts would be about $200 a day, so C2 classifies a sample (see C2).
 - **Goal:** a versioned question set and a labeled evaluation set, before any bulk spend.
 - **Questions (one System One request per post):**
 

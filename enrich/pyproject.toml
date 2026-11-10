@@ -1,0 +1,23 @@
+[project]
+name = "bsky-enrich"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Gordon Weakliem", email = "gordon.weakliem@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "duckdb==1.4.*",
+    "python-dotenv>=1.2.4",
+    "typesafe-sdk>=0.7.5",
+]
+
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]

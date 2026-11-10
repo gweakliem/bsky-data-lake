@@ -5,6 +5,7 @@ the report costs nothing; only posts without a cached answer are sent.
 
     uv run python -m bsky_enrich.evaluate            # ask Jev what isn't cached, then report
     uv run python -m bsky_enrich.evaluate --cached   # report from the cache only
+    uv run python -m bsky_enrich.evaluate --disagreements spam | less   # posts where Jev and the labels differ
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from collections import Counter
 from pathlib import Path
 
 from bsky_enrich import spec
-from bsky_enrich.label import LABELS
+from bsky_enrich.label import LABELS, render
 from bsky_enrich.sample import CACHE
 
 PRICE_PER_MTOK = 0.042  # USD per million input tokens, jev-1.14.0 (docs.typesafe.ai/models)
@@ -126,15 +127,60 @@ def report(labels: list[dict], answers: dict[str, dict], records: dict[str, dict
     return "\n".join(out)
 
 
+def disagreements(question: str, threshold: float, labels: list[dict], answers: dict[str, dict], records: dict[str, dict]) -> str:
+    """The posts where Jev and the labels differ on one question, Jev's most confident misses first."""
+    rows = [(lab, answers[lab["uri"]], records[lab["uri"]]) for lab in labels if lab["uri"] in answers]
+    out: list[str] = []
+
+    def section(title: str, items: list[tuple[str, dict]]) -> None:
+        out.append(f"\n{'=' * 100}\n{title}: {len(items)}\n{'=' * 100}")
+        for summary, record in items:
+            out.append(f"\n--- {summary}  [{record['stratum']}]\n{render(record)}")
+
+    if question == "topic":
+        def probs(a: dict) -> str:
+            top = sorted(a["topic"]["probabilities"].items(), key=lambda kv: -kv[1])[:3]
+            return ", ".join(f"{t} {p:.2f}" for t, p in top) + f"; topic_fits {a['topic_fits']:.2f}"
+
+        wrong, unlabeled = [], []
+        for lab, a, r in rows:
+            if "topic" not in lab:
+                continue
+            accepted = {lab["topic"], lab.get("topic_alt")} - {None}
+            if not accepted:
+                if a["topic_fits"] >= threshold:
+                    unlabeled.append((a["topic_fits"], f"labeled none fits; Jev: {probs(a)}", r))
+            elif a["topic"]["choice"] not in accepted:
+                wrong.append((a["topic"]["confidence"], f"labeled {'/'.join(sorted(accepted))}; Jev: {probs(a)}", r))
+        section("Jev's topic isn't the labeled one", [(s, r) for _, s, r in sorted(wrong, key=lambda x: -x[0])])
+        section(f"labeled none fits, Jev's topic_fits >= {threshold}", [(s, r) for _, s, r in sorted(unlabeled, key=lambda x: -x[0])])
+        return "\n".join(out)
+
+    pairs = [(a[question], lab[question], r) for lab, a, r in rows if lab.get(question) is not None]
+    false_yes = sorted(((p, r) for p, y, r in pairs if p >= threshold and not y), key=lambda x: -x[0])
+    false_no = sorted(((p, r) for p, y, r in pairs if p < threshold and y), key=lambda x: x[0])
+    section(f"{question}: Jev >= {threshold}, labeled no", [(f"{question} {p:.2f}", r) for p, r in false_yes])
+    section(f"{question}: labeled yes, Jev < {threshold}", [(f"{question} {p:.2f}", r) for p, r in false_no])
+    return "\n".join(out)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--cached", action="store_true", help="don't call the API; report from cached answers")
+    parser.add_argument(
+        "--disagreements", choices=[*NOULS, "topic"], metavar="QUESTION",
+        help=f"list the posts where Jev and the labels differ ({', '.join(NOULS)} or topic), from the cache only",
+    )
+    parser.add_argument("--threshold", type=float, default=0.5, help="yes threshold for --disagreements (default 0.5)")
     args = parser.parse_args()
     records = {r["uri"]: r for r in map(json.loads, (CACHE / "posts.jsonl").open())}
     labels = [lab for lab in map(json.loads, LABELS.open()) if not lab.get("skipped")]
     path = answers_path()
     cached = {a["uri"]: a for a in map(json.loads, path.open())} if path.exists() else {}
     missing = [records[lab["uri"]] for lab in labels if lab["uri"] not in cached]
+    if args.disagreements:
+        print(disagreements(args.disagreements, args.threshold, labels, cached, records))
+        return
     if missing and not args.cached:
         print(f"asking Jev about {len(missing)} post(s)", file=sys.stderr)
         asyncio.run(ask(missing))

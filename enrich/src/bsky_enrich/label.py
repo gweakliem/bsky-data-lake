@@ -41,26 +41,31 @@ def key(prompt: str, allowed: str) -> str:
     return k
 
 
-def show(record: dict, n: int, total: int) -> None:
+def render(record: dict) -> str:
+    """A post as Jev sees it, with its bsky.app link first. Shared with evaluate --disagreements."""
     s = record["state"]
     p = s["post"]
     wrap = lambda t, indent="  ": textwrap.fill(t, 100, initial_indent=indent, subsequent_indent=indent)
-    print("\033[2J\033[H", end="")
-    print(f"[{n}/{total}]  https://bsky.app/profile/{record['did']}/post/{record['uri'].rsplit('/', 1)[-1]}")
+    out = [f"https://bsky.app/profile/{record['did']}/post/{record['uri'].rsplit('/', 1)[-1]}"]
     if a := s.get("author"):
-        print(f"author: {a.get('display_name') or ''} @{a.get('handle') or '?'}")
+        out.append(f"author: {a.get('display_name') or ''} @{a.get('handle') or '?'}")
     if root := s.get("thread_root"):
-        print("\nthread starts with:\n" + wrap(root["text"], "  >> "))
+        out.append("\nthread starts with:\n" + wrap(root["text"], "  >> "))
     if parent := s.get("reply_parent"):
-        print("\nreplying to:\n" + wrap(parent["text"], "  > "))
-    print("\npost:\n" + wrap(p["text"] or "(no text)"))
+        out.append("\nreplying to:\n" + wrap(parent["text"], "  > "))
+    out.append("\npost:\n" + wrap(p["text"] or "(no text)"))
     for alt in p.get("image_alts", []):
-        print("  [image] " + textwrap.shorten(alt, 300))
+        out.append("  [image] " + textwrap.shorten(alt, 300))
     if link := p.get("link"):
-        print(f"  [link] {link.get('title') or ''} ({link.get('domain') or '?'})")
+        out.append(f"  [link] {link.get('title') or ''} ({link.get('domain') or '?'})")
     if q := p.get("quoted_post_text"):
-        print("\nquoting:\n" + wrap(q, "  | "))
-    print()
+        out.append("\nquoting:\n" + wrap(q, "  | "))
+    return "\n".join(out)
+
+
+def show(record: dict, n: int, total: int) -> None:
+    print("\033[2J\033[H", end="")
+    print(f"[{n}/{total}]  {render(record)}\n")
 
 
 def ask(record: dict) -> dict | str:

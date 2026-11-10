@@ -182,6 +182,12 @@ Prerequisite for unattended running and for D4.
     - Overlap argues for one Noul per topic instead of a single Choice, which is TypeSafe's guidance when several labels can apply. That costs one question per topic.
     - A category line only needs to exist where something downstream treats the two sides differently, and that use defines where it goes.
   - **Label noise:** re-label about 30 posts later without seeing the first answers. How often the two passes agree caps the accuracy the eval can show for Jev.
+  - **First eval run (2026-11-10, 293 labeled posts, $0.02):**
+    - **Adult** works: 90% precision and 78% recall at 0.5, against 73% for both using self-labels.
+    - **Spam** has too few labeled positives (4) to measure. Jev flags 14 posts at 0.7, 6 of them from the adult-signal group, and the hand labels didn't count engagement bait. Review with `evaluate --disagreements spam`.
+    - **Humor:** 13 labeled yes, against 79 Jev answers above 0.5. The definition is ambiguous.
+    - **Topic:** 76% correct. The confusions are mostly among politics, social issues and news, where the hand labels were also inconsistent (commentary on a political issue was often labeled politics).
+  - **Decided: drop `ai_generated` in the next spec version.** The labels judged images and video, which Jev doesn't see, so the 2 positives measure something else. On Bluesky, AI content tends to arrive as a link (a generated blog post, say) rather than as long AI-written post text, so a text question over the post has little to find.
 - **Goal:** a versioned question set and a labeled evaluation set, before any bulk spend.
 - **Questions (one System One request per post):**
 

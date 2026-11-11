@@ -10,8 +10,12 @@ dependencies = [
     "bsky-enrich",
     "httpx>=0.28.1",
     "numpy>=2.5.4",
+    "pyiceberg[glue,pyarrow]>=0.12.0",
     "python-dotenv>=1.2.4",
 ]
+
+[project.scripts]
+bsky-embed = "bsky_embed.job:main"
 
 [build-system]
 requires = ["uv_build>=0.13.5,<0.14.0"]
@@ -27,6 +31,7 @@ eval = [
     "torch>=2.15.0",
 ]
 dev = [
+    "pyiceberg[sql-sqlite]>=0.12.0",
     "pytest>=9.2.0",
     { include-group = "eval" },
 ]

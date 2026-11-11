@@ -303,7 +303,7 @@ Prerequisite for unattended running and for D4.
   - It is a derived copy: a full rebuild must be a supported command.
   - **Decide:** LanceDB or OpenSearch. LanceDB is the default because it fits the lake and has no server. Choose OpenSearch only if concurrent query load or keyword-ranking needs call for it.
 - **Query:**
-  - Combine BM25 and vector scores (reciprocal rank fusion).
+  - Combine BM25 and vector scores (reciprocal rank fusion). On the E1 query set, also try a tuned weighted sum, and bge-m3's sparse weights instead of BM25 for non-English and cross-language queries (see `docs/plans/notes/embedding-eval.md`).
   - Exclude spam and adult content by default.
   - Add a recency boost from `created_at`.
   - Optionally have Jev rerank the top 50 (a follow-up, behind a flag).

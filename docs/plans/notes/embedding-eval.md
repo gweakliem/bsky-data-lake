@@ -97,7 +97,25 @@ k-means (k = 40) on each model's vectors.
 - **For topic clustering (C1's topics, E3 aggregates), test before deciding:**
   - nomic vectors locally, since they're cheap to compute (about 10 CPU-hours a day);
   - Qwen3-8B vectors with the language direction removed, e.g. subtracting each language's mean vector;
-  - a density-based method (HDBSCAN after UMAP) instead of k-means, with LLM-named clusters. The HN thread on Wilson Lin's Hackerverse map (news.ycombinator.com/item?id=40307519) covers this approach.
+  - a density-based method (HDBSCAN after UMAP) instead of k-means, with LLM-named clusters, as HN commenters suggested for Hackerverse (below);
+  - **topics by nearest label, no clustering:** embed each C1 topic's name and description and give every post the nearest one. This is how Hackerverse places its map labels. It's cheap to score against C1's hand topics with the existing harness, and would replace Jev's topic question if it matches.
+
+## Related reading (2026-11-10)
+
+- **Hackerverse** (Wilson Lin, 2024; github.com/wilsonzlin/hackerverse; HN discussion news.ycombinator.com/item?id=40307519). A map, search and topic view over about 40M HN posts and comments.
+  - **Embeddings:** BAAI/bge-m3 (multilingual; returns a dense vector and sparse lexical weights from one pass), plus jina-embeddings-v2-small-en.
+  - **Neighbors and map:** pynndescent builds a k-NN graph, which UMAP reuses (2D, cosine, `n_neighbors=300`, `min_dist=0.25`).
+  - **Clustering:** MiniBatchKMeans swept over k = 2 to 5,000, compared by inertia, since silhouette is O(n²).
+  - **Map labels aren't cluster names:** a hand list of topics ("Rust", "Privacy", "Large language models") is embedded and projected into the map.
+  - **For us:** bge-m3's sparse weights are a candidate for E3's keyword side. BM25 scored 0.18 on cross-language queries, and a multilingual sparse model might do better; bge-m3 wasn't in E1. The label-embedding idea is in the clustering tests above.
+- **James Kachamila's reply** (Medium, 2025-08-18) to Lin's 2025 web search engine (3B SBERT embeddings, about 280M chunks, sharded RocksDB and HNSW).
+  - **Hybrid search:** pure vector search misses exact or rare terms. Fuse with BM25 by reciprocal rank fusion (no tuning), or by a weighted sum with a user-set alpha (needs tuning). E3 can test both on the E1 query set.
+  - **Quantization:** scalar quantization cuts index RAM to about a quarter; he cites up to 24× for binary. That's our storage concern above.
+  - **Drift:** a frozen model doesn't know new slang, and changing models means re-embedding or learning a linear map from the new space to the old (orthogonal Procrustes on posts embedded by both).
+    - Our re-embedding cost is bounded: about $1.31 per day of posts at current prices, and bronze keeps every post.
+    - `post_embeddings` already records `model` and `spec_version`.
+    - On a social firehose, new terms show up fast, which is the keyword staleness the former employer hit. Hybrid search covers part of it: BM25 matches a new term exactly, whether or not the model knows it.
+  - **Adversarial content:** with a public model, attackers can craft text to land near target queries. Lower priority here than spam filtering, which catches most of the same accounts.
 
 ## Decision
 

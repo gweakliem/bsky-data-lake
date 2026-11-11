@@ -3,7 +3,8 @@
 The pool is the union of every system's top 10 per query (search.py). Jev
 answers one Noul per (query, post), in any language. Hand judgments are drawn
 from English queries and English posts, spread over Jev's probabilities, and
-shown without them; their agreement with Jev is what the E1 numbers rest on.
+shown without them, judged from the same text Jev sees (u when only the thread
+or link would tell); their agreement with Jev is what the E1 numbers rest on.
 Both are committed (query ids, URIs and answers only).
 
     uv run python -m bsky_embed.judge          # ask Jev about pairs not yet judged
@@ -87,14 +88,17 @@ def hand(posts: list[dict], queries: dict[str, dict], jev: dict) -> None:
         sample += rng.sample(band, min(HAND_SAMPLE // 3, len(band)))
     rng.shuffle(sample)
     todo = [j for j in sample if (j["qid"], j["uri"]) not in seen]
-    print("y = relevant result for the query, n = not; b goes back; q quits.")
+    print("y = relevant, n = not, judged from the text shown (what the models and Jev see);\n"
+          "u = can't tell without the thread or link (counted, left out of agreement); b goes back; q quits.")
     i = 0
     while i < len(todo):
         j = todo[i]
         print("\033[2J\033[H", end="")
         print(f"[{len(done) + 1}/{len(sample)}]\n\nquery: {queries[j['qid']]['query']}\n")
-        print(textwrap.fill(by_uri[j["uri"]]["text"], 100, initial_indent="  ", subsequent_indent="  ", replace_whitespace=False) + "\n")
-        k = key("relevant? [y/n, b=back, q=quit]", "ynbq")
+        post = by_uri[j["uri"]]
+        print(textwrap.fill(post["text"], 100, initial_indent="  ", subsequent_indent="  ", replace_whitespace=False) + "\n")
+        print(f"  https://bsky.app/profile/{post['did']}/post/{post['uri'].rsplit('/', 1)[-1]}\n")
+        k = key("relevant? [y/n/u, b=back, q=quit]", "ynubq")
         if k == "q":
             break
         if k == "b":
@@ -102,7 +106,7 @@ def hand(posts: list[dict], queries: dict[str, dict], jev: dict) -> None:
                 done.pop()
                 i -= 1
             continue
-        done.append({"qid": j["qid"], "uri": j["uri"], "relevant": k == "y"})
+        done.append({"qid": j["qid"], "uri": j["uri"], "relevant": {"y": True, "n": False, "u": None}[k]})
         HAND.write_text("".join(json.dumps(d) + "\n" for d in done))
         i += 1
     print(f"\n{len(done)} of {len(sample)} hand-judged in {HAND}")

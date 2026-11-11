@@ -114,7 +114,8 @@ def show_clusters(name: str, posts: list[dict], per_cluster: int = 6) -> str:
 
 
 def agreement(jev: dict, hand: dict) -> str:
-    pairs = [(jev[key]["p"] >= 0.5, h["relevant"]) for key, h in hand.items() if key in jev]
+    pairs = [(jev[key]["p"] >= 0.5, h["relevant"]) for key, h in hand.items() if key in jev and h["relevant"] is not None]
+    unsure = sum(1 for h in hand.values() if h["relevant"] is None)
     if not pairs:
         return "hand judgments: none yet (judge --hand)"
     agree = sum(a == b for a, b in pairs)
@@ -122,7 +123,8 @@ def agreement(jev: dict, hand: dict) -> str:
     jy, hy = sum(a for a, _ in pairs), sum(b for _, b in pairs)
     return (
         f"Jev vs hand on {len(pairs)} English pairs: {100 * agree / len(pairs):.0f}% agree; "
-        f"of Jev's yeses {100 * tp / jy if jy else 0:.0f}% hand-relevant, of hand-relevant {100 * tp / hy if hy else 0:.0f}% Jev yes"
+        f"of Jev's yeses {100 * tp / jy if jy else 0:.0f}% hand-relevant, of hand-relevant {100 * tp / hy if hy else 0:.0f}% Jev yes; "
+        f"{unsure} more needed the thread or link to tell"
     )
 
 

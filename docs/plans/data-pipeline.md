@@ -277,6 +277,7 @@ Prerequisite for unattended running and for D4.
 
   Bluesky has a lot of non-English content, so multilingual support is a requirement.
 - **Text to embed (`text_spec` v1):** post text, plus image alt texts, plus the external link title. Never include reply parent text, which pulls vectors toward the parent's topic.
+- **Open: replies that only make sense in context (raised 2026-11-10, while hand-judging).** E1 judges relevance from the post's own text, which is all the models embed, so a reply like "exactly, he should be impeached" counts as not relevant to an impeachment query. That is right for comparing models, but search users would expect to find it. Candidates for `text_spec` v2 or E3: add the thread root's text (C1 found it often needed to place a reply), or index threads rather than single posts. The hand sample's `u` answers (relevance needed the thread or link) show how often this happens.
 - **Evaluation:**
   - ~50 search queries written by hand, with relevant posts judged from silver.
   - Include non-English queries and judged posts. If every query is English, the model's quality on the roughly 40% of posts that aren't English goes unmeasured, which is the same gap C1's eval has. Judging them needs translation or a reader of the language.

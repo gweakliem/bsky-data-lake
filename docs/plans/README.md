@@ -7,6 +7,7 @@ Work plans for the next phases of the data lake. Each plan is split into work pa
 | [data-pipeline.md](data-pipeline.md) | Silver layer, Jev classification, embeddings and search |
 | [deployment.md](deployment.md) | Running everything on EKS, managed by Pulumi |
 | [reporting.md](reporting.md) | Dashboards over silver: Observable Framework + DuckDB, built in the cluster, viewed by port-forward |
+| [account-management.md](account-management.md) | AWS costs, billing access, account hygiene, and moving workloads out of the management account |
 
 ## Dependency overview
 

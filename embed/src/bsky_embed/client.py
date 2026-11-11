@@ -7,7 +7,11 @@
 - A batch that keeps failing raises Fatal after max_attempts.
 
 Vectors come back as the model returns them (not truncated or normalized); see
-spec.encode_vectors. Responses may carry them as floats or as base64 float32.
+spec.encode_vectors. They are requested as base64 float32 by default: the same
+values as JSON floats (checked 2026-11-11) in about half the bytes, and far
+cheaper to parse. Bytes matter because the cluster's traffic goes through a NAT
+gateway billed per GB. `dimensions` asks the API for shorter vectors; its output
+is not the same as truncating (cosine about 0.998 on 2026-11-11).
 """
 
 from __future__ import annotations
@@ -62,7 +66,8 @@ class OpenRouter:
         concurrency: int = 20,
         batch: int = 96,
         max_attempts: int = 8,
-        encoding_format: str = "float",
+        encoding_format: str = "base64",
+        dimensions: int | None = None,
         base_url: str = BASE_URL,
         transport: httpx.AsyncBaseTransport | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
@@ -73,6 +78,7 @@ class OpenRouter:
         self.batch = batch
         self.max_attempts = max_attempts
         self.encoding_format = encoding_format
+        self.dimensions = dimensions
         self.usage = Usage()
         self._gate = asyncio.Semaphore(concurrency)
         self._sleep = sleep
@@ -108,6 +114,8 @@ class OpenRouter:
     async def _batch(self, i: int, texts: list[str], prompt: str) -> np.ndarray:
         # The API rejects empty strings (a link post can have no text and no title).
         body = {"model": self.model, "input": [(prompt + t) or " " for t in texts], "encoding_format": self.encoding_format}
+        if self.dimensions:
+            body["dimensions"] = self.dimensions
         for attempt in range(self.max_attempts):
             wait = min(2.0**attempt, 60.0)
             try:

@@ -2600,3 +2600,9 @@
 {"qid": "q48", "query": "German politics", "uri": "at://did:plc:pq3ovbgkxt5tzy4xpvum6jn5/app.bsky.feed.post/3mzui27wauo2o", "p": 0.93, "model": "jev-1.14.0"}
 {"qid": "q48", "query": "German politics", "uri": "at://did:plc:xe4noh3c7z2qdg4knd2pkgkf/app.bsky.feed.post/3mzuz7avkjk2l", "p": 0.87, "model": "jev-1.14.0"}
 {"qid": "q48", "query": "German politics", "uri": "at://did:plc:bjhbkah2avzsf6spttgtadqj/app.bsky.feed.post/3mzvegkikeq2s", "p": 0.97, "model": "jev-1.14.0"}
+{"qid": "q44", "query": "politique fran\u00e7aise", "uri": "at://did:plc:hx2vajmxjntcpmj3ly3hdalh/app.bsky.feed.post/3mzv5ixim222e", "p": 0.17, "model": "jev-1.14.0"}
+{"qid": "q22", "query": "book recommendations", "uri": "at://did:plc:3t4323mbbjuchbjam4pnymeo/app.bsky.feed.post/3mzw3jnurck2a", "p": 0.94, "model": "jev-1.14.0"}
+{"qid": "q06", "query": "Gaza", "uri": "at://did:plc:piqq5ivw4hqosteqgaw5vqga/app.bsky.feed.post/3mztud7j6fj2q", "p": 0.98, "model": "jev-1.14.0"}
+{"qid": "q05", "query": "war in Ukraine", "uri": "at://did:plc:n6ybmngmohwivlhrvtcnixow/app.bsky.feed.post/3mzubcclcps22", "p": 0.98, "model": "jev-1.14.0"}
+{"qid": "q04", "query": "ICE immigration arrests and raids", "uri": "at://did:plc:4cujbu5jdenzb2f34yghs2ia/app.bsky.feed.post/3mztpybsvs224", "p": 0.97, "model": "jev-1.14.0"}
+{"qid": "q46", "query": "Japanese Prime Minister Takaichi", "uri": "at://did:plc:f7x6zup4bpeseif4ctvflmef/app.bsky.feed.post/3mzvao4s4a22j", "p": 0.03, "model": "jev-1.14.0"}

@@ -21,6 +21,7 @@ class Model:
     doc_prompt: str = ""
     trust_remote_code: bool = False
     usd_per_mtok: float = 0.0  # hosted only, OpenRouter list price 2026-11-10
+    dimensions: int | None = None  # hosted only: ask the API for shorter vectors
 
 
 MODELS = {
@@ -33,6 +34,8 @@ MODELS = {
         Model("harrier-0.6b", "microsoft/harrier-oss-v1-0.6b", query_prompt=QWEN_QUERY),
         Model("qwen3-0.6b", "Qwen/Qwen3-Embedding-0.6B", query_prompt=QWEN_QUERY),
         Model("qwen3-8b", "qwen/qwen3-embedding-8b", hosted=True, query_prompt=QWEN_QUERY, usd_per_mtok=0.01),
+        # The API's own 1,024-dim output, which differs slightly from truncating (qwen3-8b@1024); E2 would use it to cut bytes.
+        Model("qwen3-8b-d1024", "qwen/qwen3-embedding-8b", hosted=True, query_prompt=QWEN_QUERY, usd_per_mtok=0.01, dimensions=1024),
         Model("openai-3-small", "openai/text-embedding-3-small", hosted=True, usd_per_mtok=0.02),
         Model("gemini-2", "google/gemini-embedding-2", hosted=True, usd_per_mtok=0.20),
     ]

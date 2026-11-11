@@ -117,9 +117,23 @@ k-means (k = 40) on each model's vectors.
     - On a social firehose, new terms show up fast, which is the keyword staleness the former employer hit. Hybrid search covers part of it: BM25 matches a new term exactly, whether or not the model knows it.
   - **Adversarial content:** with a public model, attackers can craft text to land near target queries. Lower priority here than spam filtering, which catches most of the same accounts.
 
+## Follow-up (2026-11-11): the API's 1,024-dim output instead of truncating
+
+E2's first real run showed the response size matters: the cluster's traffic goes through a NAT gateway billed per GB, and 4,096 floats as JSON is about 40 KB a post (about 115 GB a day at 2.9M posts). OpenRouter accepts `encoding_format: base64` (same values as JSON floats, about half the bytes) and `dimensions`. With `dimensions: 1024` the vector is not the same as truncating and renormalizing: cosine 0.997–0.998 with it, while repeat calls agree at 1.0000. So it was re-scored as its own system, `qwen3-8b-d1024`:
+
+| System | all | en | native | cross |
+|---|---|---|---|---|
+| qwen3-8b@1024 (truncated) | 0.92 | 0.89 | 1.00 | 0.95 |
+| qwen3-8b-d1024 (API) | 0.92 | 0.90 | 0.98 | 0.95 |
+
+- The two return nearly the same top 10s: only 6 pairs in the pool were new, judged by Jev for $0.0001.
+- The corpus embedded at 132 posts/s at concurrency 6, against 60 with JSON floats, for the same $0.05.
+- In the one k-means run, 33% of non-English posts were in single-language clusters, against 22% for the full vectors. Clustering wasn't Qwen's job (nomic is the clustering candidate), so this didn't weigh on the choice.
+- **Decided:** spec v1 is the API's 1,024-dim output, requested as base64: about 5.5 KB a post, a quarter of truncated base64.
+
 ## Decision
 
-- **Model:** `qwen/qwen3-embedding-8b` via OpenRouter, query prompt `QWEN_QUERY` (`embed/src/bsky_embed/models.py`), documents without a prompt, vectors normalized and truncated to the first 1,024 dims and renormalized.
+- **Model:** `qwen/qwen3-embedding-8b` via OpenRouter, query prompt `QWEN_QUERY` (`embed/src/bsky_embed/models.py`), documents without a prompt. Vectors are the API's 1,024-dim output (`dimensions: 1024`), not a truncation (changed 2026-11-11, see below).
 - **`text_spec`:** v1.
 - **Hardware:** none for inference. E2 is API-bound; size its pod for concurrency, not compute.
 - **Revisit** if the cost optimizations don't hold the bill near $40/month, if OpenRouter's price or availability changes, or when the clustering tests above pick a second model for topics.

@@ -11,7 +11,7 @@ from bsky_enrich.testing import add_posts, add_runs, silver_catalog, t
 
 
 class FakeEmbedder:
-    """Wider than DIMS, like the real model, with a vector derived from the text."""
+    """DIMS wide, as the API returns with `dimensions`, with a vector derived from the text."""
 
     def __init__(self, fail_on_call: int | None = None):
         self.calls: list[list[str]] = []
@@ -21,7 +21,7 @@ class FakeEmbedder:
         self.calls.append(list(texts))
         if len(self.calls) == self.fail_on_call:
             raise RuntimeError("boom")
-        v = np.zeros((len(texts), spec.DIMS + 16), dtype=np.float32)
+        v = np.zeros((len(texts), spec.DIMS), dtype=np.float32)
         for i, text in enumerate(texts):
             v[i, len(text) % spec.DIMS] = 2.0
         return v

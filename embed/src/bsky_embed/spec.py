@@ -4,10 +4,13 @@ Changing any of these is a new SPEC_VERSION, since vectors are only comparable
 within one (the post_embeddings_current view selects one version). The model is
 fixed inside a version, so the view needs no model filter.
 
-The stored vector is the model's output truncated to DIMS, L2-normalized after
-truncating (truncation breaks unit length), as DIMS little-endian float16
-values in a binary column. Iceberg has no float16 type; this is half the size
-of list<float32>.
+The stored vector is the API's own DIMS-wide output (`dimensions` in the
+request), not a truncation of the full 4,096: it differs slightly (cosine about
+0.998) but scored the same in E1 (nDCG@10 0.92, see
+docs/plans/notes/embedding-eval.md) and is a quarter of the download. It is
+L2-normalized again (the API's already is) and stored as DIMS little-endian
+float16 values in a binary column. Iceberg has no float16 type; this is half
+the size of list<float32>.
 """
 
 from __future__ import annotations
@@ -38,10 +41,14 @@ def normalize(v: np.ndarray) -> np.ndarray:
 
 
 def encode_vectors(v: np.ndarray) -> list[bytes]:
-    """Rows of model output (at least DIMS wide) to the stored bytes, one per row."""
-    if v.ndim != 2 or v.shape[1] < DIMS:
-        raise ValueError(f"expected (n, >= {DIMS}) vectors, got {v.shape}")
-    stored = normalize(v[:, :DIMS].astype(np.float32)).astype(DTYPE)
+    """Rows of API output, exactly DIMS wide, to the stored bytes, one per row.
+
+    Wider rows are refused rather than truncated: they would mean the request's
+    `dimensions` was ignored, and truncated vectors aren't spec v1.
+    """
+    if v.ndim != 2 or v.shape[1] != DIMS:
+        raise ValueError(f"expected (n, {DIMS}) vectors, got {v.shape}")
+    stored = normalize(v.astype(np.float32)).astype(DTYPE)
     return [row.tobytes() for row in stored]
 
 

@@ -57,7 +57,7 @@ async def encode_hosted(m: Model, texts: list[str], prompt: str, batch: int = 96
     from bsky_embed.client import OpenRouter
 
     load_dotenv(corpus.EVAL.parents[1] / ".env")
-    async with OpenRouter.from_env(m.id, batch=batch, concurrency=concurrency) as client:
+    async with OpenRouter.from_env(m.id, batch=batch, concurrency=concurrency, dimensions=m.dimensions) as client:
         v = await client.embed(texts, prompt)
     return normalize(v), client.usage.prompt_tokens, client.usage.cost_usd
 

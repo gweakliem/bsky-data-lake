@@ -142,7 +142,7 @@ async def _main(args: argparse.Namespace) -> Stats:
         out = cat.load_table(name) if cat.table_exists(name) else None
         return await run(cat, out, None, namespace=args.namespace, chunk_posts=args.chunk_posts, max_posts=args.max_posts)
     out = output_table(cat, args.namespace)
-    async with OpenRouter.from_env(spec.MODEL, concurrency=args.concurrency, batch=args.batch) as client:
+    async with OpenRouter.from_env(spec.MODEL, concurrency=args.concurrency, batch=args.batch, dimensions=spec.DIMS) as client:
         before = await client.key_info()
         log.info("key: limit %s, remaining %s, usage today %s", before.get("limit"), before.get("limit_remaining"), before.get("usage_daily"))
         try:

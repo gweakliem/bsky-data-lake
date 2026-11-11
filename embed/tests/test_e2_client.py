@@ -64,6 +64,19 @@ def test_batches_keep_input_order_and_tally_usage():
     assert client.usage.requests == 3
 
 
+def test_requests_base64_and_dimensions_when_asked():
+    bodies = []
+
+    def handler(request, body):
+        bodies.append(body)
+        return ok(body, b64=True)
+
+    run(fake(handler, dimensions=1024)[0], ["x"])
+    run(fake(handler)[0], ["x"])
+    assert bodies[0]["encoding_format"] == "base64" and bodies[0]["dimensions"] == 1024
+    assert "dimensions" not in bodies[1]
+
+
 def test_empty_text_is_sent_as_a_space():
     seen = []
 
@@ -129,9 +142,9 @@ def test_free_variants_are_refused():
         OpenRouter("key", "qwen/qwen3-embedding-8b:free")
 
 
-def test_stored_vectors_are_truncated_then_normalized_float16():
-    v = np.zeros((2, spec.DIMS + 8), dtype=np.float32)
-    v[0, 0], v[0, spec.DIMS] = 3.0, 100.0  # beyond DIMS: dropped before normalizing
+def test_stored_vectors_are_normalized_float16():
+    v = np.zeros((2, spec.DIMS), dtype=np.float32)
+    v[0, 0] = 3.0
     v[1, :2] = [3.0, 4.0]
     stored = spec.encode_vectors(v)
     assert [len(b) for b in stored] == [2 * spec.DIMS] * 2
@@ -141,6 +154,7 @@ def test_stored_vectors_are_truncated_then_normalized_float16():
     assert np.isclose(np.linalg.norm(b), 1.0, atol=1e-3)
 
 
-def test_too_narrow_vectors_are_rejected():
+@pytest.mark.parametrize("width", [spec.DIMS - 1, 4096])
+def test_vectors_of_another_width_are_refused(width):
     with pytest.raises(ValueError):
-        spec.encode_vectors(np.ones((1, spec.DIMS - 1), dtype=np.float32))
+        spec.encode_vectors(np.ones((1, width), dtype=np.float32))

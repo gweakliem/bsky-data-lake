@@ -289,9 +289,22 @@ Prerequisite for unattended running and for D4.
 
 - **Depends on:** E1, S3.
 - **Goal:** `bsky-embed` reads new rows from `posts_current` and writes `post_embeddings`.
-- **Columns:** `uri`, `cid`, `day`, `model`, `spec_version`, `embedded_at`, `silver_processed_at`, and `vector` (fixed-size list<float32>).
+- **Columns:** `uri`, `cid`, `day`, `model`, `spec_version`, `embedded_at`, `silver_processed_at`, and `vector` (`binary`: 1,024 little-endian float16 values, L2-normalized, 2,048 bytes; see Vector storage).
 - **Behavior:** the same prefilter, chunked commits, watermark and idempotency rules as C2. Embeddings come from the OpenRouter API (E1's choice), in concurrent batches with retries, so the job needs no GPU; cache vectors by text hash so identical text is embedded once.
-- **Acceptance:** tests use a tiny or fake model to check batching, idempotency and the vector shape. A real run over one day of posts succeeds.
+- **Language: Python (decided 2026-11-11), with pyiceberg + pyarrow (the support-job default under Layout), not Sail.** The job waits on the API, Arrow and Parquet work is native code, and `text_spec` stays shared with the E1 harness (and C2 with the TypeSafe SDK).
+  - Rust (as the ingestor) is the fallback if the measurement below shows real cost, or if E2 becomes an always-on near-real-time service. Before a full rewrite, consider a PyO3 extension for one hot path.
+  - Cheap Python savings to try first: request base64 vectors from the API if OpenRouter supports it (JSON parsing of 4,096 floats a post is the main CPU cost), and truncate to 1,024 dims before anything else touches them.
+- **To settle before code:**
+  - **Reading (decided 2026-11-11):** `posts_current` is a portable SQL view, so scan `posts` by `silver_processed_at` watermark and drop URIs in `deletes`, via pyiceberg or DuckDB (as `embed/corpus.py`).
+  - **Vector storage: float16 bytes in a `binary` column (decided 2026-11-11).** Iceberg has no float16 type, and `list<float32>` at 1,024 dims would be about 12 GB a day; this is half that. Vectors are truncated to 1,024 dims, then L2-normalized, then cast to float16, as in E1 (normalize after truncating, since truncation breaks unit length). Readers decode with `np.frombuffer(b, '<f2')`. The cost is that SQL engines see opaque bytes, which is fine since nothing does vector math in SQL. `post_embeddings` is the source of truth and LanceDB (E3) is loaded from it.
+  - **Throughput:** E1 measured 60 posts/s at concurrency 6 (96 inputs a request), about 13 hours for a day's 2.9M posts. Run at about 20 and plan the backfill of days already in silver.
+    - **Rate limits (checked 2026-11-11):** OpenRouter's 20 requests/minute and 1,000/day caps apply only to `:free` model variants. Paid models such as `qwen/qwen3-embedding-8b` have no platform-level request cap. A day's posts is about 30,000 requests at 96 inputs each, so the job must never use a `:free` ID.
+    - Throttling can still come from upstream providers (429) or, on prepaid accounts with a low balance, from the in-flight spend budget (402). Retry 429s with backoff, honoring `Retry-After`. Treat a 402 as fatal, because it means credits or the key's limit are exhausted.
+    - `GET /api/v1/key` reports the key's limit, its remaining credit and daily usage, which a pre-run check or the run's log line can record.
+  - **Spam and adult filtering** waits for C2; E2 ships with the length prefilter only.
+- **Acceptance:**
+  - Tests use a tiny or fake model to check batching, idempotency and the vector shape. A real run over one day of posts succeeds.
+  - The real run records CPU-seconds and peak memory (RSS) per 100,000 posts, plus wall time and API cost. If those make the pod a material cost at 2.9M posts a day, revisit the language choice with these numbers.
 
 ## WP E3: search index and query API
 

@@ -186,10 +186,11 @@ D4 is split so the loader, which recovers easily, is the first workload deployed
     - the support jobs read silver and write only their own tables;
     - the search API reads the index only.
   - An Athena workgroup (results in a separate prefix of the warehouse bucket) only if ad hoc SQL is wanted. Maintenance doesn't need it.
-- **Secrets:** the TypeSafe API key.
-  - Store it in AWS Secrets Manager, set once by hand or through `pulumi config set --secret`.
-  - Deliver it to the classify job through the Secrets Store CSI driver or External Secrets Operator. A plain Kubernetes Secret created by Pulumi from a secret config value is the simpler option.
-  - **Decide:** pick one and record it.
+- **Secrets:** the TypeSafe API key (classify) and the OpenRouter API key (embed).
+  - **Decided (2026-11-11):** a Pulumi secret config value in the apps stack (`pulumi config set --secret`), turned into a plain Kubernetes Secret per job and read as an env var (`TYPESAFE_API_KEY`, `OPENROUTER_API_KEY`) through `secretKeyRef`. The stack uses the passphrase secrets provider, so the committed stack file holds only ciphertext. Check that the cluster encrypts Secrets in etcd with KMS (EKS's default on current versions).
+  - Jobs read keys from the environment only, as they do locally from `.env`, with no AWS SDK call for secrets. Rotation is `pulumi config set` plus `pulumi up`; CronJobs pick up the new value on their next run.
+  - Rejected: Secrets Manager with the Secrets Store CSI driver or External Secrets Operator (a cluster component to run for two keys). Fallback if a key is ever needed outside k8s or out of Pulumi state: Secrets Manager read by the job through its Pod Identity role.
+  - Production uses its own keys, separate from the ones used for evals, so they can be revoked alone and their spend seen separately. The OpenRouter key has a credit limit set in OpenRouter, a little above the expected monthly spend plus any backfill.
 - **Apps project:**
   - CronJobs for `bsky-silver` (`:05` each hour), `bsky-classify` (`:20`) and `bsky-embed` (`:20`), all with `concurrencyPolicy: Forbid`, `backoffLimit: 2` and `activeDeadlineSeconds` set.
   - Classify gets its budget flags (`--max-input-tokens`, `--sample-rate`) from stack config, so spend is controlled in one place.

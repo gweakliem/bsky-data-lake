@@ -301,6 +301,16 @@ def test_raw_files_expire_after_a_week():
     assert all(r["status"] == "Enabled" for r in lifecycle["rules"])
 
 
+def test_warehouse_tiers_iceberg_and_never_expires_it():
+    lifecycles = mocks.by_type["aws:s3/bucketLifecycleConfiguration:BucketLifecycleConfiguration"]
+    (lifecycle,) = [lc for lc in lifecycles if lc["bucket"] == "test-warehouse"]
+    (tiering,) = [r for r in lifecycle["rules"] if r.get("transitions")]
+    assert tiering["filter"]["prefix"] == "iceberg/"
+    assert [t["storageClass"] for t in tiering["transitions"]] == ["INTELLIGENT_TIERING"]
+    # The warehouse is the archive: nothing in it may expire.
+    assert not any("expiration" in r for r in lifecycle["rules"])
+
+
 @pulumi.runtime.test
 def test_pipeline_alarms_notify_the_alert_topic():
     def check(topic_arn):

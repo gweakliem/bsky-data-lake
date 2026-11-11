@@ -152,6 +152,20 @@ Prerequisite for unattended running and for D4.
   - `post_classifications_current` and `post_embeddings_current`: joined to `posts_current` on `uri` and `cid`, for the active `spec_version`. Defined here, populated once C2/E2 exist.
 - **Acceptance:** tests show that a deleted post disappears from `posts_current` and from both support views, and that an edited post (new `cid`) shows its old classification as stale.
 
+## WP S4: control the growth of likes (backlog)
+
+- **Status: not started (raised 2026-11-10).**
+- **Why:** on 2026-11-10, `likes` was 50 GB of silver's 136 GB, the largest table, and `post_edges` (32 GB) also holds a `like` row for every like, so likes are stored twice. The lake keeps every Iceberg table indefinitely as the archive. Intelligent-Tiering (data stack, 2026-11-10) cuts the cost per GB but not the growth.
+- **Look at first:**
+  - Rows and bytes per like, and which columns take the space (`event_id`, `uri`, subject URI, `did`, `rev`, `cid`). Check whether the bulk is simply the volume.
+  - Whether like edges in `post_edges` are used by anything (S3's views, reports), or whether `likes` alone is enough.
+  - Compression: sort order within files (by subject URI, so its dictionary encoding pays off), codec and level.
+- **Options to weigh:**
+  - Aggregate: per-post like counts by hour or day (`post_like_counts`), keeping raw likes for a limited window or only in bronze.
+  - Drop columns that can be derived, or the duplicate edge rows.
+  - Keep everything, and accept the growth at tiered prices.
+- **Constraint:** unlikes arrive as deletes, so any aggregate has to subtract them or be rebuilt from the raw rows.
+
 ## WP C1: classification spec and evaluation set
 
 - **Depends on:** S2 (needs real posts).

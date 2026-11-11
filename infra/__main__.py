@@ -159,6 +159,32 @@ raw_lifecycle = aws.s3.BucketLifecycleConfiguration(
     ],
 )
 
+# The warehouse is the archive: Iceberg tables are kept indefinitely (only snapshots expire).
+# Intelligent-Tiering moves data files untouched for 30 and 90 days to cheaper tiers that stay
+# instantly readable, so Iceberg, DuckDB and Athena reads are unaffected. The opt-in Archive and
+# Deep Archive tiers are never enabled: they would make old files unreadable without a restore.
+# S3 doesn't transition objects under 128 KB, so small metadata files stay in Standard.
+warehouse_lifecycle = aws.s3.BucketLifecycleConfiguration(
+    "warehouse",
+    bucket=warehouse_bucket,
+    rules=[
+        aws.s3.BucketLifecycleConfigurationRuleArgs(
+            id="iceberg-intelligent-tiering",
+            status="Enabled",
+            filter=aws.s3.BucketLifecycleConfigurationRuleFilterArgs(prefix="iceberg/"),
+            transitions=[aws.s3.BucketLifecycleConfigurationRuleTransitionArgs(days=0, storage_class="INTELLIGENT_TIERING")],
+        ),
+        aws.s3.BucketLifecycleConfigurationRuleArgs(
+            id="abort-incomplete-uploads",
+            status="Enabled",
+            filter=aws.s3.BucketLifecycleConfigurationRuleFilterArgs(prefix=""),
+            abort_incomplete_multipart_upload=aws.s3.BucketLifecycleConfigurationRuleAbortIncompleteMultipartUploadArgs(
+                days_after_initiation=1
+            ),
+        ),
+    ],
+)
+
 # --- Athena: a workgroup for ad hoc queries, with its own results bucket ---
 
 athena_results = aws.s3.Bucket(

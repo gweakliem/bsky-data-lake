@@ -269,7 +269,7 @@ Prerequisite for unattended running and for D4.
 ## WP E1: embedding model selection
 
 - **Depends on:** S2.
-- **Status: in progress (2026-11-10).** `embed/` has the harness (see `embed/CLAUDE.md`) and a first run: 100k posts of 2026-11-09 in every language, 9 models plus BM25 and truncated variants, 48 queries, relevance judged by Jev over the pooled top 10s ($0.05), and a k-means clustering check, which the plan didn't originally include. First results: Qwen3-8B via OpenRouter scores best everywhere (nDCG@10 0.93; 0.92 truncated to 1,024 dims; about $1.30 a day for all eligible posts). nomic-embed-text-v2-moe is the strongest local model (0.87, 77 posts/s on 4 CPU threads) and barely clusters by language, while harrier and e5 group many non-English posts by language. Next: hand-judge 150 pairs to check Jev, then the write-up and the choice.
+- **Status: done (2026-11-10).** Chosen: Qwen3-Embedding-8B via OpenRouter, truncated to 1,024 dims, `text_spec` v1; see `docs/plans/notes/embedding-eval.md`. It leads overall (nDCG@10 0.92 at 1,024 dims) and on English queries over non-English posts (0.95, against about 0.70 for the best local models), for about $40 a month at all eligible posts. Jev agreed with 150 hand judgments 85% of the time (strict: precision 94%, recall 80%), and the ranking held at lower thresholds. nomic-embed-text-v2-moe stays a candidate for topic clustering, since it barely clusters by language. Cost optimizations (skip spam and short posts, dedupe text, quantize) are listed in the notes, unmeasured.
 - **Goal:** pick a model and a text-preparation scheme using measured search quality, not defaults.
 - **Candidates:**
   - small open multilingual embedding models that run well on CPU or a single small GPU;
@@ -290,7 +290,7 @@ Prerequisite for unattended running and for D4.
 - **Depends on:** E1, S3.
 - **Goal:** `bsky-embed` reads new rows from `posts_current` and writes `post_embeddings`.
 - **Columns:** `uri`, `cid`, `day`, `model`, `spec_version`, `embedded_at`, `silver_processed_at`, and `vector` (fixed-size list<float32>).
-- **Behavior:** the same prefilter, chunked commits, watermark and idempotency rules as C2. Batch inference, on GPU when available, falling back to CPU.
+- **Behavior:** the same prefilter, chunked commits, watermark and idempotency rules as C2. Embeddings come from the OpenRouter API (E1's choice), in concurrent batches with retries, so the job needs no GPU; cache vectors by text hash so identical text is embedded once.
 - **Acceptance:** tests use a tiny or fake model to check batching, idempotency and the vector shape. A real run over one day of posts succeeds.
 
 ## WP E3: search index and query API

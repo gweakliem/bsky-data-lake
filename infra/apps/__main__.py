@@ -251,6 +251,99 @@ silver = k8s.batch.v1.CronJob(
     opts=opts,
 )
 
+# --- Embed job: hourly after silver, embeds new posts into post_embeddings (embed/) ---
+
+embed_labels = {"app.kubernetes.io/name": "embed", "app.kubernetes.io/part-of": "bsky-data-lake"}
+embed_image_tag = config.require("embedImageTag")
+embed_image = repository_urls.apply(lambda urls: f"{urls['embed']}:{embed_image_tag}")
+# Memory is mostly one silver window's posts: about 0.9 GB for the largest (backlog)
+# windows, 1.2-2.0 GB with a chunk of vectors in flight (measured 2026-11-11).
+embed_memory_limit = config.get("embedMemoryLimit") or "2560Mi"
+embed_concurrency = config.get_int("embedConcurrency") or 60
+embed_chunk_posts = config.get_int("embedChunkPosts") or 20_000
+# Suspended while a backfill runs elsewhere: two writers would embed the same
+# posts twice (no corruption, the views dedupe, but double the API spend).
+embed_suspend = config.get_bool("embedSuspend", True)
+
+# The name must match the platform stack's Pod Identity association.
+embed_sa = k8s.core.v1.ServiceAccount(
+    "embed",
+    metadata=k8s.meta.v1.ObjectMetaArgs(name="embed", namespace=ns),
+    opts=opts,
+)
+
+# The production OpenRouter key: `pulumi config set --secret openrouterApiKey`, so the
+# stack file holds only ciphertext. Rotating it is the same command plus `pulumi up`;
+# each run reads the Secret when its pod starts.
+embed_key = k8s.core.v1.Secret(
+    "embed-openrouter",
+    metadata=k8s.meta.v1.ObjectMetaArgs(name="bsky-embed-openrouter", namespace=ns, labels=embed_labels),
+    type="Opaque",
+    string_data={"OPENROUTER_API_KEY": config.require_secret("openrouterApiKey")},
+    opts=opts,
+)
+
+embed = k8s.batch.v1.CronJob(
+    "embed",
+    metadata=k8s.meta.v1.ObjectMetaArgs(name="embed", namespace=ns, labels=embed_labels),
+    spec=k8s.batch.v1.CronJobSpecArgs(
+        # :20, after silver's :05 run has committed the previous hour's windows.
+        schedule="20 * * * *",
+        time_zone="Etc/UTC",
+        suspend=embed_suspend,
+        concurrency_policy="Forbid",
+        successful_jobs_history_limit=3,
+        failed_jobs_history_limit=3,
+        job_template=k8s.batch.v1.JobTemplateSpecArgs(
+            metadata=k8s.meta.v1.ObjectMetaArgs(labels=embed_labels),
+            spec=k8s.batch.v1.JobSpecArgs(
+                backoff_limit=2,
+                # Under an hour, so a stuck run can't block the next schedule. A run
+                # cut short resumes from its last committed chunk.
+                active_deadline_seconds=55 * 60,
+                template=k8s.core.v1.PodTemplateSpecArgs(
+                    metadata=k8s.meta.v1.ObjectMetaArgs(
+                        labels=embed_labels,
+                        annotations={"karpenter.sh/do-not-disrupt": "true"},
+                    ),
+                    spec=k8s.core.v1.PodSpecArgs(
+                        service_account_name=embed_sa.metadata.name,
+                        restart_policy="Never",
+                        security_context=pod_security,
+                        containers=[
+                            k8s.core.v1.ContainerArgs(
+                                name="embed",
+                                image=embed_image,
+                                env=[
+                                    k8s.core.v1.EnvVarArgs(
+                                        name="BSKY_SILVER_LOCATION", value=data.require_output("silver_location")
+                                    ),
+                                    k8s.core.v1.EnvVarArgs(name="AWS_REGION", value=region),
+                                    k8s.core.v1.EnvVarArgs(
+                                        name="OPENROUTER_API_KEY",
+                                        value_from=k8s.core.v1.EnvVarSourceArgs(
+                                            secret_key_ref=k8s.core.v1.SecretKeySelectorArgs(
+                                                name=embed_key.metadata.name, key="OPENROUTER_API_KEY"
+                                            )
+                                        ),
+                                    ),
+                                ],
+                                args=["--concurrency", str(embed_concurrency), "--chunk-posts", str(embed_chunk_posts)],
+                                resources=k8s.core.v1.ResourceRequirementsArgs(
+                                    requests={"cpu": "250m", "memory": embed_memory_limit},
+                                    limits={"memory": embed_memory_limit},
+                                ),
+                                security_context=container_security,
+                            )
+                        ],
+                    ),
+                ),
+            ),
+        ),
+    ),
+    opts=opts,
+)
+
 # --- Reports: hourly static-site build, served by nginx (see reports/CLAUDE.md) ---
 
 reports_labels = {"app.kubernetes.io/name": "reports", "app.kubernetes.io/part-of": "bsky-data-lake"}

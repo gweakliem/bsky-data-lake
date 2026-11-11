@@ -179,6 +179,11 @@ D4 is split so the loader, which recovers easily, is the first workload deployed
 ## WP D5: pipeline jobs and maintenance
 
 - **Depends on:** D4. Each job is added once its pipeline WP (S2, C2, E2, E3) is done.
+- **Embed (written 2026-11-11, not yet applied):**
+  - Data stack: role `bsky-embed`, which reads only `posts`, `deletes` and `silver_runs` and writes only `post_embeddings` (Glue `CreateTable`/`UpdateTable` on that table alone), and the alarm `bsky-embed-stalled` on a log metric of committed chunks. The alarm's notifications stay off (`embedAlarmActions`) until the CronJob runs.
+  - Platform stack: ECR repository `embed` and the Pod Identity association for service account `embed`.
+  - Apps stack: the CronJob `embed` at `:20`, suspended (`embedSuspend`, default true) while the first backfill runs from a laptop, since two writers would embed the same posts twice. It runs with a 2.5 Gi memory limit (requests equal to limits), `--concurrency 60` and `--chunk-posts 20000`. The key is in the Secret `bsky-embed-openrouter`, from `pulumi config set --secret openrouterApiKey`.
+  - No Glue optimizer for `post_embeddings` yet: it gets a few files an hour. Revisit with M2 in `account-management.md`.
 - **Data project:**
   - Glue database `bsky_silver` (location `iceberg/bsky_silver` in the warehouse bucket).
   - Roles and policies per job, least privilege:
@@ -194,7 +199,7 @@ D4 is split so the loader, which recovers easily, is the first workload deployed
 - **Apps project:**
   - CronJobs for `bsky-silver` (`:05` each hour), `bsky-classify` (`:20`) and `bsky-embed` (`:20`), all with `concurrencyPolicy: Forbid`, `backoffLimit: 2` and `activeDeadlineSeconds` set.
   - Classify gets its budget flags (`--max-input-tokens`, `--sample-rate`) from stack config, so spend is controlled in one place.
-  - Embed gets a GPU node selector and toleration if needed.
+  - Embed needs no GPU: E1 chose a hosted model.
   - The search API (E3) as a Deployment with a ClusterIP Service. External exposure is out of scope.
 - **File sizes (measured 2026-11-02):** the loader writes one Iceberg data file per raw file. By then the bronze table had 2,101 files of ~1.5 MB for 20.8M records, plus a snapshot per commit. Fixes, in order:
   1. Larger raw files: done in D4b (~16 MB).

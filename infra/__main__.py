@@ -50,6 +50,9 @@ budget_monthly_usd = config.get("budgetMonthlyUsd") or "250"
 container_log_group = config.get("containerLogGroup") or "/bsky/containers"
 container_log_retention_days = config.get_int("containerLogRetentionDays") or 14
 athena_results_retention_days = config.get_int("athenaResultsRetentionDays") or 7
+# The embed job's stalled alarm notifies only once its CronJob runs: until then
+# (a suspended CronJob, a backfill run from a laptop) it has no logs to count.
+embed_alarm_actions = config.get_bool("embedAlarmActions", False)
 
 account_id = aws.get_caller_identity_output().account_id
 region = aws.get_region_output().region
@@ -489,6 +492,66 @@ reports_policy_document = pulumi.Output.all(account_id, region).apply(
     )
 )
 
+# --- IAM: the embed job reads silver posts and writes only post_embeddings ---
+# pyiceberg over Glue (embed/, enrich/incremental.py). Its own table is created
+# on the first run, so CreateTable and UpdateTable are limited to that table.
+
+EMBED_READS = ["posts", "deletes", "silver_runs"]
+EMBED_TABLE = "post_embeddings"
+
+embed_policy_document = pulumi.Output.all(account_id, region).apply(
+    lambda args: json.dumps(
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Sid": "ListTableFiles",
+                    "Effect": "Allow",
+                    "Action": "s3:ListBucket",
+                    "Resource": warehouse_bucket_arn,
+                    "Condition": {
+                        "StringLike": {
+                            "s3:prefix": [f"iceberg/{silver_database_name}/{t}/*" for t in [*EMBED_READS, EMBED_TABLE]]
+                        }
+                    },
+                },
+                {
+                    "Sid": "ReadPosts",
+                    "Effect": "Allow",
+                    "Action": "s3:GetObject",
+                    "Resource": [f"{warehouse_bucket_arn}/iceberg/{silver_database_name}/{t}/*" for t in EMBED_READS],
+                },
+                {
+                    "Sid": "WriteEmbeddings",
+                    "Effect": "Allow",
+                    "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+                    "Resource": f"{warehouse_bucket_arn}/iceberg/{silver_database_name}/{EMBED_TABLE}/*",
+                },
+                {
+                    "Sid": "ReadSilverCatalog",
+                    "Effect": "Allow",
+                    "Action": ["glue:GetDatabase", "glue:GetTable", "glue:GetTables"],
+                    "Resource": [
+                        f"arn:aws:glue:{args[1]}:{args[0]}:catalog",
+                        f"arn:aws:glue:{args[1]}:{args[0]}:database/{silver_database_name}",
+                        f"arn:aws:glue:{args[1]}:{args[0]}:table/{silver_database_name}/*",
+                    ],
+                },
+                {
+                    "Sid": "WriteEmbeddingsCatalog",
+                    "Effect": "Allow",
+                    "Action": ["glue:CreateTable", "glue:UpdateTable"],
+                    "Resource": [
+                        f"arn:aws:glue:{args[1]}:{args[0]}:catalog",
+                        f"arn:aws:glue:{args[1]}:{args[0]}:database/{silver_database_name}",
+                        f"arn:aws:glue:{args[1]}:{args[0]}:table/{silver_database_name}/{EMBED_TABLE}",
+                    ],
+                },
+            ],
+        }
+    )
+)
+
 # --- Container logs: Fluent Bit on the cluster ships pod logs here ---
 
 # Created here, not by Fluent Bit, so it gets a retention period and the shipper
@@ -594,6 +657,16 @@ if manage_iam:
     reports_role = _pod_role("reports", "bsky-reports", "EKS pod role for the report build")
     aws.iam.RolePolicyAttachment("reports", role=reports_role.name, policy_arn=reports_policy.arn)
     pulumi.export("reports_role_arn", reports_role.arn)
+
+    embed_policy = bsky_iam.policy(
+        "embed",
+        name="bsky-embed",
+        description="Read silver posts and write the post_embeddings table",
+        policy=embed_policy_document,
+    )
+    embed_role = _pod_role("embed", "bsky-embed", "EKS pod role for the embedding job")
+    aws.iam.RolePolicyAttachment("embed", role=embed_role.name, policy_arn=embed_policy.arn)
+    pulumi.export("embed_role_arn", embed_role.arn)
 
     # --- Glue table optimizers: compaction, snapshot retention, orphan files ---
     # Maintenance runs in the catalog rather than the pipeline, so moving to
@@ -782,6 +855,40 @@ silver_stalled = aws.cloudwatch.MetricAlarm(
     alarm_actions=[alerts.arn],
     ok_actions=[alerts.arn],
     opts=pulumi.ResourceOptions(depends_on=[silver_windows]),
+)
+
+# The embed job logs one line per committed chunk ("bsky_embed.job: window
+# (...]: N posts committed, ..."). Every silver window adds posts, so an hourly
+# run after silver's always commits; two clock hours without a commit means two
+# runs failed, hung or never started, as for silver.
+embed_chunks = aws.cloudwatch.LogMetricFilter(
+    "embed-chunks",
+    name="bsky-embed-chunks",
+    log_group_name=container_logs.name,
+    pattern='"bsky_embed.job: window" "posts committed"',
+    metric_transformation=aws.cloudwatch.LogMetricFilterMetricTransformationArgs(
+        namespace=SILVER_METRIC_NAMESPACE,
+        name="EmbedChunksCommitted",
+        value="1",
+        default_value="0",
+    ),
+)
+embed_stalled = aws.cloudwatch.MetricAlarm(
+    "embed-stalled",
+    name="bsky-embed-stalled",
+    alarm_description="No embedding chunk committed in two clock hours: embed runs are failing, hung or not starting",
+    namespace=SILVER_METRIC_NAMESPACE,
+    metric_name="EmbedChunksCommitted",
+    statistic="Sum",
+    period=3600,
+    evaluation_periods=2,
+    comparison_operator="LessThanThreshold",
+    threshold=1,
+    treat_missing_data="breaching",
+    actions_enabled=embed_alarm_actions,
+    alarm_actions=[alerts.arn],
+    ok_actions=[alerts.arn],
+    opts=pulumi.ResourceOptions(depends_on=[embed_chunks]),
 )
 
 # Account-wide: filtering by the project tag would need cost allocation tags

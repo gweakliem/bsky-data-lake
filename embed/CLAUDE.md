@@ -14,6 +14,7 @@ uv run python -m bsky_embed.judge              # Jev judges pooled pairs not yet
 uv run python -m bsky_embed.judge --hand       # hand-judge 150 English pairs, in a real terminal
 uv run python -m bsky_embed.report             # the numbers; --clusters MODEL to read one model's clusters
 uv run bsky-embed --dry-run                    # E2: what a run would read and embed (also needs BSKY_WAREHOUSE_BUCKET)
+docker buildx build --build-context enrich=../enrich -t bsky-embed .   # the job's image; enrich/ is a path dependency
 ```
 
 `OPENROUTER_API_KEY` (hosted models) and `TYPESAFE_API_KEY` (Jev) come from the repo's `.env`.

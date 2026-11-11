@@ -14,6 +14,7 @@ INGESTOR_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/bsky/bsky-ingestor"
 FLUENT_BIT_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/bsky/bsky-fluent-bit"
 SILVER_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/bsky/bsky-silver"
 REPORTS_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/bsky/bsky-reports"
+EMBED_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/bsky/bsky-embed"
 BOUNDARY_ARN = f"arn:aws:iam::{ACCOUNT}:policy/bsky-workload-boundary"
 
 
@@ -33,6 +34,7 @@ class Mocks(pulumi.runtime.Mocks):
                     "fluent_bit_role_arn": FLUENT_BIT_ROLE_ARN,
                     "silver_role_arn": SILVER_ROLE_ARN,
                     "reports_role_arn": REPORTS_ROLE_ARN,
+                    "embed_role_arn": EMBED_ROLE_ARN,
                 }
             }
         self.resources[args.typ].append(state)
@@ -170,7 +172,7 @@ def test_ecr_scans_and_expires():
         assert [r["selection"]["tagStatus"] for r in rules] == ["untagged", "tagged"]
 
     repo = platform.repositories["iceberg-loader"]
-    assert sorted(platform.repositories) == ["iceberg-loader", "ingest", "reports", "silver"]
+    assert sorted(platform.repositories) == ["embed", "iceberg-loader", "ingest", "reports", "silver"]
     lifecycle = mocks.resources["aws:ecr/lifecyclePolicy:LifecyclePolicy"][0]
     return pulumi.Output.all(repo.image_scanning_configuration, lifecycle["policy"]).apply(check)
 
@@ -193,6 +195,17 @@ def test_silver_pod_identity_uses_data_stack_role():
         assert role_arn == SILVER_ROLE_ARN
 
     a = platform.pod_identities["silver"]
+    return pulumi.Output.all(a.namespace, a.service_account, a.role_arn).apply(check)
+
+
+@pulumi.runtime.test
+def test_embed_pod_identity_uses_data_stack_role():
+    def check(args):
+        namespace, service_account, role_arn = args
+        assert (namespace, service_account) == ("bsky", "embed")
+        assert role_arn == EMBED_ROLE_ARN
+
+    a = platform.pod_identities["embed"]
     return pulumi.Output.all(a.namespace, a.service_account, a.role_arn).apply(check)
 
 

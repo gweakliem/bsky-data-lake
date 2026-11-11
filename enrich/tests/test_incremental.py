@@ -39,6 +39,14 @@ def test_committed_through_is_the_outputs_max_watermark(cat):
     assert [f.name for f in out.spec().fields] == ["day"]
 
 
+def test_location_prefers_the_silver_location(monkeypatch):
+    monkeypatch.setenv("BSKY_WAREHOUSE_BUCKET", "wh")
+    monkeypatch.delenv("BSKY_SILVER_LOCATION", raising=False)
+    assert inc.location("t") == "s3://wh/iceberg/bsky_silver/t"
+    monkeypatch.setenv("BSKY_SILVER_LOCATION", "s3://other/iceberg/bsky_silver/")
+    assert inc.location("t") == "s3://other/iceberg/bsky_silver/t"
+
+
 def test_chunks_end_only_where_the_watermark_changes():
     marks = [t(1)] * 3 + [t(2)] * 4 + [t(3)] + [t(4)] * 2
     rows = pa.table({"bronze_ingested_at": pa.array(marks, TS)})

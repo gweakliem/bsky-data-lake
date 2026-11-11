@@ -315,7 +315,9 @@ def test_warehouse_tiers_iceberg_and_never_expires_it():
 def test_pipeline_alarms_notify_the_alert_topic():
     def check(topic_arn):
         alarms = {a["name"]: a for a in mocks.by_type["aws:cloudwatch/metricAlarm:MetricAlarm"]}
-        assert sorted(alarms) == ["bsky-dead-letters", "bsky-ingest-stalled", "bsky-loader-behind", "bsky-silver-stalled"]
+        assert sorted(alarms) == [
+            "bsky-dead-letters", "bsky-embed-stalled", "bsky-ingest-stalled", "bsky-loader-behind", "bsky-silver-stalled",
+        ]
         for a in alarms.values():
             assert a["alarmActions"] == [topic_arn] and a["okActions"] == [topic_arn]
         stalled = alarms["bsky-ingest-stalled"]
@@ -324,12 +326,15 @@ def test_pipeline_alarms_notify_the_alert_topic():
         assert stalled["treatMissingData"] == "breaching"
         assert alarms["bsky-dead-letters"]["dimensions"] == {"QueueName": "bsky-raw-files-dlq"}
         assert alarms["bsky-loader-behind"]["threshold"] == 900
-        silver = alarms["bsky-silver-stalled"]
-        (metric_filter,) = mocks.by_type["aws:cloudwatch/logMetricFilter:LogMetricFilter"]
-        transformation = metric_filter["metricTransformation"]
-        assert (silver["namespace"], silver["metricName"]) == (transformation["namespace"], transformation["name"])
-        assert metric_filter["logGroupName"] == "/bsky/containers"
-        assert (silver["period"], silver["evaluationPeriods"], silver["treatMissingData"]) == (3600, 2, "breaching")
+        filters = {f["name"]: f for f in mocks.by_type["aws:cloudwatch/logMetricFilter:LogMetricFilter"]}
+        for alarm, metric_filter in [("bsky-silver-stalled", "bsky-silver-windows"), ("bsky-embed-stalled", "bsky-embed-chunks")]:
+            a, f = alarms[alarm], filters[metric_filter]
+            transformation = f["metricTransformation"]
+            assert (a["namespace"], a["metricName"]) == (transformation["namespace"], transformation["name"])
+            assert f["logGroupName"] == "/bsky/containers"
+            assert (a["period"], a["evaluationPeriods"], a["treatMissingData"]) == (3600, 2, "breaching")
+        # Silent until its CronJob runs in the cluster (embedAlarmActions).
+        assert alarms["bsky-embed-stalled"]["actionsEnabled"] is False
         (sub,) = mocks.by_type["aws:sns/topicSubscription:TopicSubscription"]
         assert (sub["protocol"], sub["endpoint"]) == ("email", "alerts@example.com")
 
@@ -341,6 +346,25 @@ def test_monthly_budget_alerts():
     assert (budget["limitAmount"], budget["timeUnit"]) == ("250", "MONTHLY")
     kinds = sorted((n["notificationType"], n["threshold"]) for n in budget["notifications"])
     assert kinds == [("ACTUAL", 50), ("ACTUAL", 80), ("ACTUAL", 100), ("FORECASTED", 100)]
+
+
+@pulumi.runtime.test
+def test_embed_reads_posts_and_writes_only_its_table():
+    def check(args):
+        policy, arn = args
+        stmts = {s["Sid"]: s for s in json.loads(policy)["Statement"]}
+        silver = "arn:aws:s3:::test-warehouse/iceberg/bsky_silver"
+        assert stmts["ReadPosts"]["Action"] == "s3:GetObject"
+        assert stmts["ReadPosts"]["Resource"] == [f"{silver}/posts/*", f"{silver}/deletes/*", f"{silver}/silver_runs/*"]
+        assert stmts["WriteEmbeddings"]["Resource"] == f"{silver}/post_embeddings/*"
+        tables = [r for r in stmts["WriteEmbeddingsCatalog"]["Resource"] if ":table/" in r]
+        assert tables == ["arn:aws:glue:us-west-2:123456789012:table/bsky_silver/post_embeddings"]
+        assert not any(a in stmts["ReadSilverCatalog"]["Action"] for a in ["glue:CreateTable", "glue:UpdateTable"])
+        # Neither bronze nor the raw-file bucket.
+        assert "bsky_raw" not in policy and "test-bucket" not in policy
+        assert arn == "arn:aws:iam::123456789012:role/bsky/bsky-embed"
+
+    return pulumi.Output.all(infra.embed_policy_document, infra.embed_role.arn).apply(check)
 
 
 @pulumi.runtime.test

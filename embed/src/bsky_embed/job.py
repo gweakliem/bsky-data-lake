@@ -9,8 +9,8 @@ most one chunk and a rerun picks up where the last commit ended.
     uv run bsky-embed --max-posts 10000      # stop after a chunk once this many are embedded
     uv run bsky-embed                        # until caught up with silver
 
-Needs AWS credentials, BSKY_WAREHOUSE_BUCKET and OPENROUTER_API_KEY (the repo's
-.env locally; a Kubernetes Secret in the cluster).
+Needs AWS credentials, BSKY_SILVER_LOCATION or BSKY_WAREHOUSE_BUCKET, and
+OPENROUTER_API_KEY (the repo's .env locally; a Kubernetes Secret in the cluster).
 """
 
 from __future__ import annotations

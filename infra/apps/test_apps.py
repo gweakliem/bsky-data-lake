@@ -9,6 +9,7 @@ REPO_URL = "123456789012.dkr.ecr.us-west-2.amazonaws.com/bsky/iceberg-loader"
 INGEST_REPO_URL = "123456789012.dkr.ecr.us-west-2.amazonaws.com/bsky/ingest"
 SILVER_REPO_URL = "123456789012.dkr.ecr.us-west-2.amazonaws.com/bsky/silver"
 REPORTS_REPO_URL = "123456789012.dkr.ecr.us-west-2.amazonaws.com/bsky/reports"
+EMBED_REPO_URL = "123456789012.dkr.ecr.us-west-2.amazonaws.com/bsky/embed"
 STACK_OUTPUTS = {
     "kubeconfig": "{}",
     "namespace": "bsky",
@@ -17,6 +18,7 @@ STACK_OUTPUTS = {
         "ingest": INGEST_REPO_URL,
         "silver": SILVER_REPO_URL,
         "reports": REPORTS_REPO_URL,
+        "embed": EMBED_REPO_URL,
     },
     "queue_url": "https://sqs.us-west-2.amazonaws.com/123456789012/bsky-raw-files",
     "raw_table_location": "s3://test-warehouse/iceberg/bsky_raw/jetstream",
@@ -44,6 +46,8 @@ pulumi.runtime.set_config("bsky-apps:loaderImageTag", "abc1234")
 pulumi.runtime.set_config("bsky-apps:ingestImageTag", "def5678")
 pulumi.runtime.set_config("bsky-apps:silverImageTag", "fed4321")
 pulumi.runtime.set_config("bsky-apps:reportsImageTag", "ccc1111")
+pulumi.runtime.set_config("bsky-apps:embedImageTag", "eee2222")
+pulumi.runtime.set_config("bsky-apps:openrouterApiKey", "sk-or-test")
 
 _spec = importlib.util.spec_from_file_location("apps_stack", Path(__file__).with_name("__main__.py"))
 apps = importlib.util.module_from_spec(_spec)
@@ -126,6 +130,30 @@ def test_fluent_bit_daemonset():
         assert mounts["varlog"]["read_only"]
 
     return apps.fluent_bit.spec.apply(check)
+
+
+@pulumi.runtime.test
+def test_embed_cronjob_starts_suspended_and_reads_its_key_from_a_secret():
+    def check(args):
+        spec, secret_name = args
+        assert spec["schedule"] == "20 * * * *"
+        assert spec["suspend"] is True  # until the laptop backfill is done
+        assert spec["concurrency_policy"] == "Forbid"
+        job = spec["job_template"]["spec"]
+        assert job["backoff_limit"] == 2 and job["active_deadline_seconds"] < 3600
+        assert job["template"]["metadata"]["annotations"]["karpenter.sh/do-not-disrupt"] == "true"
+        pod = job["template"]["spec"]
+        assert pod["service_account_name"] == "embed"
+        (container,) = pod["containers"]
+        assert container["image"] == f"{EMBED_REPO_URL}:eee2222"
+        env = {e["name"]: e for e in container["env"]}
+        assert env["BSKY_SILVER_LOCATION"]["value"] == STACK_OUTPUTS["silver_location"]
+        ref = env["OPENROUTER_API_KEY"]["value_from"]["secret_key_ref"]
+        assert (ref["name"], ref["key"]) == (secret_name, "OPENROUTER_API_KEY")
+        assert "value" not in env["OPENROUTER_API_KEY"] or env["OPENROUTER_API_KEY"]["value"] is None
+        assert container["resources"]["limits"]["memory"] == container["resources"]["requests"]["memory"]
+
+    return pulumi.Output.all(apps.embed.spec, apps.embed_key.metadata.name).apply(check)
 
 
 @pulumi.runtime.test

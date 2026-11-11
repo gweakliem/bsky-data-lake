@@ -54,8 +54,13 @@ def catalog() -> Catalog:
 
 
 def location(table: str) -> str:
-    """Explicit table location, as silver's (Sail's Glue catalog has no warehouse setting)."""
-    return f"s3://{os.environ['BSKY_WAREHOUSE_BUCKET']}/iceberg/{SILVER}/{table}"
+    """Explicit table location, next to silver's tables (Sail's Glue catalog has no warehouse setting).
+
+    BSKY_SILVER_LOCATION (s3://<bucket>/iceberg/bsky_silver, as the silver job
+    takes it in the cluster) wins; otherwise it's built from BSKY_WAREHOUSE_BUCKET.
+    """
+    base = os.environ.get("BSKY_SILVER_LOCATION") or f"s3://{os.environ['BSKY_WAREHOUSE_BUCKET']}/iceberg/{SILVER}"
+    return f"{base.rstrip('/')}/{table}"
 
 
 def ensure_table(cat: Catalog, identifier: str, schema: Schema, table_location: str) -> Table:

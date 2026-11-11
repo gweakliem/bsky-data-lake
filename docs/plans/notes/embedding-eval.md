@@ -117,9 +117,19 @@ k-means (k = 40) on each model's vectors.
     - On a social firehose, new terms show up fast, which is the keyword staleness the former employer hit. Hybrid search covers part of it: BM25 matches a new term exactly, whether or not the model knows it.
   - **Adversarial content:** with a public model, attackers can craft text to land near target queries. Lower priority here than spam filtering, which catches most of the same accounts.
 
-## Follow-up (2026-11-11): the API's 1,024-dim output instead of truncating
+## Follow-up (2026-11-11): the API's 1,024-dim output, and providers
 
-E2's first real run showed the response size matters: the cluster's traffic goes through a NAT gateway billed per GB, and 4,096 floats as JSON is about 40 KB a post (about 115 GB a day at 2.9M posts). OpenRouter accepts `encoding_format: base64` (same values as JSON floats, about half the bytes) and `dimensions`. With `dimensions: 1024` the vector is not the same as truncating and renormalizing: cosine 0.997–0.998 with it, while repeat calls agree at 1.0000. So it was re-scored as its own system, `qwen3-8b-d1024`:
+E2's first real run showed the response size matters: the cluster's traffic goes through a NAT gateway billed per GB, and 4,096 floats as JSON is about 40 KB a post (about 115 GB a day at 2.9M posts). OpenRouter accepts `encoding_format: base64` (same values as JSON floats, about half the bytes) and `dimensions`.
+
+A first comparison found `dimensions: 1024` 0.997–0.998 cosine from truncating and renormalizing, so it was re-scored as its own system, `qwen3-8b-d1024` (below). **That gap turned out to be between providers, not methods.** OpenRouter serves the model from three providers and picks one per request unless told otherwise; the two calls had been served by different ones. Pinned to one provider at a time:
+
+| Comparison (4 texts) | cosine |
+|---|---|
+| `dimensions: 1024` vs the same provider's 4,096 truncated and renormalized (Nebius; DeepInfra) | 1.0000 |
+| Nebius vs DeepInfra, full 4,096 dims or 1,024 | 0.997–0.998 |
+| Nebius (bf16) vs SiliconFlow (fp8) | 0.9999 |
+
+So `dimensions` is truncation, and E1's `qwen3-8b@1024` scores describe the deployed vectors. Which provider served E1's cached vectors wasn't recorded. The re-score (still a fair check that the gap doesn't matter for search):
 
 | System | all | en | native | cross |
 |---|---|---|---|---|
@@ -129,11 +139,11 @@ E2's first real run showed the response size matters: the cluster's traffic goes
 - The two return nearly the same top 10s: only 6 pairs in the pool were new, judged by Jev for $0.0001.
 - The corpus embedded at 132 posts/s at concurrency 6, against 60 with JSON floats, for the same $0.05.
 - In the one k-means run, 33% of non-English posts were in single-language clusters, against 22% for the full vectors. Clustering wasn't Qwen's job (nomic is the clustering candidate), so this didn't weigh on the choice.
-- **Decided:** spec v1 is the API's 1,024-dim output, requested as base64: about 5.5 KB a post, a quarter of truncated base64.
+- **Decided:** spec v1 is the API's 1,024-dim output, requested as base64 (about 5.5 KB a post, a quarter of 4,096 in base64), **always from Nebius** (bf16, $0.01 per M tokens) with no fallback. A table mixing providers would hold vectors that disagree by about 0.002 cosine with no way to tell which is which. Each row records its provider. The first backfill (807,686 posts, unpinned) was dropped and redone pinned; it had stopped on a 400 from SiliconFlow, the 4×-price fp8 provider, which OpenRouter fell back to while the others were dropping connections.
 
 ## Decision
 
-- **Model:** `qwen/qwen3-embedding-8b` via OpenRouter, query prompt `QWEN_QUERY` (`embed/src/bsky_embed/models.py`), documents without a prompt. Vectors are the API's 1,024-dim output (`dimensions: 1024`), not a truncation (changed 2026-11-11, see below).
+- **Model:** `qwen/qwen3-embedding-8b` via OpenRouter, query prompt `QWEN_QUERY` (`embed/src/bsky_embed/models.py`), documents without a prompt. Vectors are the API's 1,024-dim output (`dimensions: 1024`, the same as truncating), always from the provider Nebius (2026-11-11, see above).
 - **`text_spec`:** v1.
 - **Hardware:** none for inference. E2 is API-bound; size its pod for concurrency, not compute.
 - **Revisit** if the cost optimizations don't hold the bill near $40/month, if OpenRouter's price or availability changes, or when the clustering tests above pick a second model for topics.

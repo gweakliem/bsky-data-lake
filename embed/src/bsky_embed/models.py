@@ -34,7 +34,7 @@ MODELS = {
         Model("harrier-0.6b", "microsoft/harrier-oss-v1-0.6b", query_prompt=QWEN_QUERY),
         Model("qwen3-0.6b", "Qwen/Qwen3-Embedding-0.6B", query_prompt=QWEN_QUERY),
         Model("qwen3-8b", "qwen/qwen3-embedding-8b", hosted=True, query_prompt=QWEN_QUERY, usd_per_mtok=0.01),
-        # The API's own 1,024-dim output, which differs slightly from truncating (qwen3-8b@1024); E2 would use it to cut bytes.
+        # The API's 1,024-dim output (E2's spec). It equals truncating; the first comparison's gap was a provider difference.
         Model("qwen3-8b-d1024", "qwen/qwen3-embedding-8b", hosted=True, query_prompt=QWEN_QUERY, usd_per_mtok=0.01, dimensions=1024),
         Model("openai-3-small", "openai/text-embedding-3-small", hosted=True, usd_per_mtok=0.02),
         Model("gemini-2", "google/gemini-embedding-2", hosted=True, usd_per_mtok=0.20),

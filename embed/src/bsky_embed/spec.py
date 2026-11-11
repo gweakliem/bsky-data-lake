@@ -4,13 +4,14 @@ Changing any of these is a new SPEC_VERSION, since vectors are only comparable
 within one (the post_embeddings_current view selects one version). The model is
 fixed inside a version, so the view needs no model filter.
 
-The stored vector is the API's own DIMS-wide output (`dimensions` in the
-request), not a truncation of the full 4,096: it differs slightly (cosine about
-0.998) but scored the same in E1 (nDCG@10 0.92, see
-docs/plans/notes/embedding-eval.md) and is a quarter of the download. It is
-L2-normalized again (the API's already is) and stored as DIMS little-endian
-float16 values in a binary column. Iceberg has no float16 type; this is half
-the size of list<float32>.
+The stored vector is the API's DIMS-wide output (`dimensions` in the request),
+which is the full 4,096 truncated and renormalized, as E1 scored it (nDCG@10
+0.92, see docs/plans/notes/embedding-eval.md), at a quarter of the download.
+It always comes from one PROVIDER: providers of this model differ (DeepInfra's
+vectors are about 0.998 cosine from Nebius's), so the provider is part of the
+spec. It is L2-normalized again and stored as DIMS little-endian float16 values
+in a binary column. Iceberg has no float16 type; this is half the size of
+list<float32>.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ __all__ = ["DIMS", "DOC_PROMPT", "DTYPE", "MODEL", "SPEC_VERSION", "decode_vecto
 SPEC_VERSION = "v1"
 MODEL = "qwen/qwen3-embedding-8b"  # paid variant: never a :free id (20/min, 1,000/day caps)
 DIMS = 1024
+PROVIDER = "nebius"  # OpenRouter slug (responses name it "Nebius"); bf16, $0.01/M tokens; no fallback to another provider
 DOC_PROMPT = ""  # Qwen3-Embedding puts its instruction on queries only
 DTYPE = np.dtype("<f2")
 
@@ -43,8 +45,7 @@ def normalize(v: np.ndarray) -> np.ndarray:
 def encode_vectors(v: np.ndarray) -> list[bytes]:
     """Rows of API output, exactly DIMS wide, to the stored bytes, one per row.
 
-    Wider rows are refused rather than truncated: they would mean the request's
-    `dimensions` was ignored, and truncated vectors aren't spec v1.
+    Other widths are refused: they would mean the request's `dimensions` was ignored.
     """
     if v.ndim != 2 or v.shape[1] != DIMS:
         raise ValueError(f"expected (n, {DIMS}) vectors, got {v.shape}")

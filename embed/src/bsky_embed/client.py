@@ -10,8 +10,15 @@ Vectors come back as the model returns them (not truncated or normalized); see
 spec.encode_vectors. They are requested as base64 float32 by default: the same
 values as JSON floats (checked 2026-11-11) in about half the bytes, and far
 cheaper to parse. Bytes matter because the cluster's traffic goes through a NAT
-gateway billed per GB. `dimensions` asks the API for shorter vectors; its output
-is not the same as truncating (cosine about 0.998 on 2026-11-11).
+gateway billed per GB. `dimensions` asks for shorter vectors: the same as
+truncating and renormalizing (cosine 1.0000 at each provider, 2026-11-11).
+
+`provider` pins one OpenRouter provider with no fallbacks. Providers of the same
+model don't return the same vectors: for qwen3-embedding-8b, DeepInfra's differ
+from Nebius's by cosine about 0.998 even at full width, while SiliconFlow's (fp8)
+match Nebius's at 0.9999 (2026-11-11). Unpinned, OpenRouter picks per request,
+so one table would mix them. Each row's serving provider is returned, so a
+mismatch would show; one other than the pinned provider is Fatal.
 """
 
 from __future__ import annotations
@@ -34,6 +41,12 @@ FATAL_STATUS = {400, 401, 402, 403}
 
 class Fatal(RuntimeError):
     """An error retrying won't fix: bad request, auth, or credits exhausted."""
+
+
+@dataclass
+class Embeddings:
+    vectors: np.ndarray  # one row per input, in order
+    providers: list[str]  # the provider that served each row
 
 
 @dataclass
@@ -68,6 +81,7 @@ class OpenRouter:
         max_attempts: int = 8,
         encoding_format: str = "base64",
         dimensions: int | None = None,
+        provider: str | None = None,
         base_url: str = BASE_URL,
         transport: httpx.AsyncBaseTransport | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
@@ -79,6 +93,7 @@ class OpenRouter:
         self.max_attempts = max_attempts
         self.encoding_format = encoding_format
         self.dimensions = dimensions
+        self.provider = provider
         self.usage = Usage()
         self._gate = asyncio.Semaphore(concurrency)
         self._sleep = sleep
@@ -105,17 +120,21 @@ class OpenRouter:
         r.raise_for_status()
         return r.json()["data"]
 
-    async def embed(self, texts: list[str], prompt: str = "") -> np.ndarray:
-        """One row per text, in order."""
+    async def embed(self, texts: list[str], prompt: str = "") -> Embeddings:
+        """One row per text, in order, with the provider that served it."""
         chunks = [texts[i : i + self.batch] for i in range(0, len(texts), self.batch)]
         parts = await asyncio.gather(*(self._batch(i, c, prompt) for i, c in enumerate(chunks)))
-        return np.vstack(parts) if parts else np.empty((0, 0), dtype=np.float32)
+        if not parts:
+            return Embeddings(np.empty((0, 0), dtype=np.float32), [])
+        return Embeddings(np.vstack([v for v, _ in parts]), [p for v, p in parts for _ in range(len(v))])
 
-    async def _batch(self, i: int, texts: list[str], prompt: str) -> np.ndarray:
+    async def _batch(self, i: int, texts: list[str], prompt: str) -> tuple[np.ndarray, str]:
         # The API rejects empty strings (a link post can have no text and no title).
         body = {"model": self.model, "input": [(prompt + t) or " " for t in texts], "encoding_format": self.encoding_format}
         if self.dimensions:
             body["dimensions"] = self.dimensions
+        if self.provider:
+            body["provider"] = {"only": [self.provider], "allow_fallbacks": False}
         for attempt in range(self.max_attempts):
             wait = min(2.0**attempt, 60.0)
             try:
@@ -135,10 +154,13 @@ class OpenRouter:
                     data = sorted(j["data"], key=lambda d: d["index"])
                     if len(data) != len(texts):
                         raise Fatal(f"{self.model}: {len(data)} embeddings for {len(texts)} inputs")
+                    served = j.get("provider") or ""
+                    if self.provider and served.lower() != self.provider.lower():
+                        raise Fatal(f"{self.model}: served by {served!r}, not the pinned {self.provider!r}")
                     usage = j.get("usage") or {}
                     self.usage.prompt_tokens += usage.get("prompt_tokens") or 0
                     self.usage.cost_usd += usage.get("cost") or 0.0
-                    return np.vstack([_embedding(d["embedding"]) for d in data])
+                    return np.vstack([_embedding(d["embedding"]) for d in data]), served
                 # A 200 without data is how OpenRouter reports some upstream errors.
                 if r.status_code == 429:
                     wait = _retry_after(r) or wait

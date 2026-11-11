@@ -28,7 +28,7 @@ def fake(handler, **kwargs) -> tuple[OpenRouter, list[float]]:
     return client, waits
 
 
-def ok(body: dict, dims: int = 4, b64: bool = False) -> httpx.Response:
+def ok(body: dict, dims: int = 4, b64: bool = False, provider: str = "Nebius") -> httpx.Response:
     """One vector per input, whose first value is the input's length, so order can be checked."""
     data = []
     for i, t in enumerate(body["input"]):
@@ -37,10 +37,15 @@ def ok(body: dict, dims: int = 4, b64: bool = False) -> httpx.Response:
         e = base64.b64encode(v.tobytes()).decode() if b64 else v.tolist()
         data.append({"index": i, "embedding": e})
     data.reverse()  # the API doesn't promise order; the client sorts by index
-    return httpx.Response(200, json={"data": data, "usage": {"prompt_tokens": len(body["input"]), "cost": 0.001}})
+    usage = {"prompt_tokens": len(body["input"]), "cost": 0.001}
+    return httpx.Response(200, json={"data": data, "usage": usage, "provider": provider})
 
 
 def run(client: OpenRouter, texts: list[str]) -> np.ndarray:
+    return run_full(client, texts).vectors
+
+
+def run_full(client: OpenRouter, texts: list[str]):
     async def go():
         async with client:
             return await client.embed(texts)
@@ -75,6 +80,35 @@ def test_requests_base64_and_dimensions_when_asked():
     run(fake(handler)[0], ["x"])
     assert bodies[0]["encoding_format"] == "base64" and bodies[0]["dimensions"] == 1024
     assert "dimensions" not in bodies[1]
+
+
+def test_pinned_provider_is_requested_without_fallbacks_and_reported_per_row():
+    bodies = []
+
+    def handler(request, body):
+        bodies.append(body)
+        return ok(body, provider="Nebius")
+
+    e = run_full(fake(handler, batch=2, provider="nebius")[0], ["a", "b", "c"])
+    assert all(b["provider"] == {"only": ["nebius"], "allow_fallbacks": False} for b in bodies)
+    assert e.providers == ["Nebius"] * 3 and e.vectors.shape[0] == 3
+
+
+def test_a_row_from_another_provider_is_fatal():
+    client, _ = fake(lambda request, body: ok(body, provider="DeepInfra"), provider="Nebius")
+    with pytest.raises(Fatal, match="DeepInfra"):
+        run(client, ["x"])
+
+
+def test_unpinned_requests_name_no_provider():
+    bodies = []
+
+    def handler(request, body):
+        bodies.append(body)
+        return ok(body)
+
+    run(fake(handler)[0], ["x"])
+    assert "provider" not in bodies[0]
 
 
 def test_empty_text_is_sent_as_a_space():

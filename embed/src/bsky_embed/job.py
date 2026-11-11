@@ -26,7 +26,6 @@ import time
 from dataclasses import asdict, dataclass
 from typing import Protocol
 
-import numpy as np
 import pyarrow as pa
 from pyiceberg.catalog import Catalog
 from pyiceberg.schema import Schema
@@ -34,6 +33,7 @@ from pyiceberg.table import Table
 from pyiceberg.types import BinaryType, DateType, NestedField, StringType, TimestamptzType
 
 from bsky_embed import spec
+from bsky_embed.client import Embeddings
 from bsky_enrich import incremental as inc
 
 log = logging.getLogger("bsky_embed.job")
@@ -48,12 +48,13 @@ SCHEMA = Schema(
     NestedField(6, "embedded_at", TimestamptzType(), required=False),
     NestedField(7, "bronze_ingested_at", TimestamptzType(), required=False),
     NestedField(8, "vector", BinaryType(), required=False),
+    NestedField(9, "provider", StringType(), required=False),  # the OpenRouter provider that served it
 )
 TS = pa.timestamp("us", tz="UTC")
 
 
 class Embedder(Protocol):
-    async def embed(self, texts: list[str], prompt: str = "") -> np.ndarray: ...
+    async def embed(self, texts: list[str], prompt: str = "") -> Embeddings: ...
 
 
 @dataclass
@@ -70,7 +71,8 @@ def output_table(cat: Catalog, namespace: str = inc.SILVER, location: str | None
     return inc.ensure_table(cat, f"{namespace}.{TABLE}", SCHEMA, location or inc.location(TABLE))
 
 
-def rows(posts: list[dict], vectors: dict[str, bytes], embedded_at: dt.datetime) -> pa.Table:
+def rows(posts: list[dict], vectors: dict[str, tuple[bytes, str]], embedded_at: dt.datetime) -> pa.Table:
+    """vectors: text -> (stored vector, provider)."""
     n = len(posts)
     return pa.table({
         "uri": [p["uri"] for p in posts],
@@ -80,7 +82,8 @@ def rows(posts: list[dict], vectors: dict[str, bytes], embedded_at: dt.datetime)
         "spec_version": [spec.SPEC_VERSION] * n,
         "embedded_at": pa.array([embedded_at] * n, TS),
         "bronze_ingested_at": pa.array([p["bronze_ingested_at"] for p in posts], TS),
-        "vector": pa.array([vectors[spec.text(p)] for p in posts], pa.binary()),
+        "vector": pa.array([vectors[spec.text(p)][0] for p in posts], pa.binary()),
+        "provider": [vectors[spec.text(p)][1] for p in posts],
     })
 
 
@@ -115,7 +118,8 @@ async def run(
             stats.embedded += len(keep)
             stats.chunks += 1
             if client is not None:
-                vectors = dict(zip(texts, spec.encode_vectors(await client.embed(texts, spec.DOC_PROMPT)), strict=True))
+                e = await client.embed(texts, spec.DOC_PROMPT)
+                vectors = dict(zip(texts, zip(spec.encode_vectors(e.vectors), e.providers, strict=True), strict=True))
                 inc.append(out, rows(keep, vectors, dt.datetime.now(dt.UTC)))
                 log.info("window (%s, %s]: %d posts committed, %d so far", w.after, w.through, len(keep), stats.embedded)
             if max_posts is not None and stats.embedded >= max_posts:
@@ -142,7 +146,9 @@ async def _main(args: argparse.Namespace) -> Stats:
         out = cat.load_table(name) if cat.table_exists(name) else None
         return await run(cat, out, None, namespace=args.namespace, chunk_posts=args.chunk_posts, max_posts=args.max_posts)
     out = output_table(cat, args.namespace)
-    async with OpenRouter.from_env(spec.MODEL, concurrency=args.concurrency, batch=args.batch, dimensions=spec.DIMS) as client:
+    async with OpenRouter.from_env(
+        spec.MODEL, concurrency=args.concurrency, batch=args.batch, dimensions=spec.DIMS, provider=spec.PROVIDER
+    ) as client:
         before = await client.key_info()
         log.info("key: limit %s, remaining %s, usage today %s", before.get("limit"), before.get("limit_remaining"), before.get("usage_daily"))
         try:

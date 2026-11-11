@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from bsky_embed import job, spec
+from bsky_embed.client import Embeddings
 from bsky_enrich import incremental as inc
 from bsky_enrich.testing import add_posts, add_runs, silver_catalog, t
 
@@ -24,7 +25,7 @@ class FakeEmbedder:
         v = np.zeros((len(texts), spec.DIMS), dtype=np.float32)
         for i, text in enumerate(texts):
             v[i, len(text) % spec.DIMS] = 2.0
-        return v
+        return Embeddings(v, ["Nebius"] * len(texts))
 
 
 @pytest.fixture
@@ -58,6 +59,7 @@ def test_writes_one_normalized_row_per_eligible_post(cat):
     assert table["uri"].to_pylist() == ["p1", "p2"]
     assert set(table["model"].to_pylist()) == {spec.MODEL}
     assert set(table["spec_version"].to_pylist()) == {spec.SPEC_VERSION}
+    assert set(table["provider"].to_pylist()) == {"Nebius"}
     v = spec.decode_vector(table["vector"][0].as_py())
     assert v.shape == (spec.DIMS,) and np.isclose(np.linalg.norm(v), 1.0)
 

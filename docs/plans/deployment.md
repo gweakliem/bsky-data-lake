@@ -179,10 +179,12 @@ D4 is split so the loader, which recovers easily, is the first workload deployed
 ## WP D5: pipeline jobs and maintenance
 
 - **Depends on:** D4. Each job is added once its pipeline WP (S2, C2, E2, E3) is done.
-- **Embed (written 2026-11-11, not yet applied):**
+- **Embed (applied 2026-11-11; CronJob suspended until the backfill finishes):**
+  - Checked in the cluster: a one-off `--dry-run` Job from the CronJob's template read the table's watermark and a full window of posts through Pod Identity (Glue via boto3, S3 via pyarrow).
+  - **To go live** once the laptop backfill reports caught up: `pulumi config set embedSuspend false` in `infra/apps` and `embedAlarmActions true` in `infra/`, then apply both (data first). The first scheduled run should commit the hours since the backfill ended.
   - Data stack: role `bsky-embed`, which reads only `posts`, `deletes` and `silver_runs` and writes only `post_embeddings` (Glue `CreateTable`/`UpdateTable` on that table alone), and the alarm `bsky-embed-stalled` on a log metric of committed chunks. The alarm's notifications stay off (`embedAlarmActions`) until the CronJob runs.
   - Platform stack: ECR repository `embed` and the Pod Identity association for service account `embed`.
-  - Apps stack: the CronJob `embed` at `:20`, suspended (`embedSuspend`, default true) while the first backfill runs from a laptop, since two writers would embed the same posts twice. It runs with a 2.5 Gi memory limit (requests equal to limits), `--concurrency 60` and `--chunk-posts 20000`. The key is in the Secret `bsky-embed-openrouter`, from `pulumi config set --secret openrouterApiKey`.
+  - Apps stack: the CronJob `embed` at `:20`, suspended (`embedSuspend`, default true) while the first backfill runs from a laptop, since two writers would embed the same posts twice. It runs with a 2.5 Gi memory limit (requests equal to limits), `--concurrency 60` and `--chunk-posts 20000`. The key is in the Secret `bsky-embed-openrouter`, read at deploy time from `~/.config/bsky-data-lake/openrouter-key`.
   - No Glue optimizer for `post_embeddings` yet: it gets a few files an hour. Revisit with M2 in `account-management.md`.
 - **Data project:**
   - Glue database `bsky_silver` (location `iceberg/bsky_silver` in the warehouse bucket).
@@ -192,8 +194,8 @@ D4 is split so the loader, which recovers easily, is the first workload deployed
     - the search API reads the index only.
   - An Athena workgroup (results in a separate prefix of the warehouse bucket) only if ad hoc SQL is wanted. Maintenance doesn't need it.
 - **Secrets:** the TypeSafe API key (classify) and the OpenRouter API key (embed).
-  - **Decided (2026-11-11):** a Pulumi secret config value in the apps stack (`pulumi config set --secret`), turned into a plain Kubernetes Secret per job and read as an env var (`TYPESAFE_API_KEY`, `OPENROUTER_API_KEY`) through `secretKeyRef`. The stack uses the passphrase secrets provider, so the committed stack file holds only ciphertext. Check that the cluster encrypts Secrets in etcd with KMS (EKS's default on current versions).
-  - Jobs read keys from the environment only, as they do locally from `.env`, with no AWS SDK call for secrets. Rotation is `pulumi config set` plus `pulumi up`; CronJobs pick up the new value on their next run.
+  - **Decided (2026-11-11):** the apps stack reads each key at deploy time from a file outside the repo, under `~/.config/bsky-data-lake/` (mode 600, next to the Pulumi passphrase), marks it secret, and turns it into a plain Kubernetes Secret per job, read as an env var (`TYPESAFE_API_KEY`, `OPENROUTER_API_KEY`) through `secretKeyRef`. The public repo holds no form of the key, not even ciphertext; Pulumi keeps it only in its passphrase-encrypted state in the state bucket. Changed the same day from a `pulumi config set --secret` value, before it was ever pushed. Check that the cluster encrypts Secrets in etcd with KMS (EKS's default on current versions).
+  - Jobs read keys from the environment only, as they do locally from `.env`, with no AWS SDK call for secrets. Rotation is overwriting the file plus `pulumi up`; CronJobs pick up the new value on their next run. An apps-stack `pulumi up` without the file fails rather than blanking the Secret.
   - Rejected: Secrets Manager with the Secrets Store CSI driver or External Secrets Operator (a cluster component to run for two keys). Fallback if a key is ever needed outside k8s or out of Pulumi state: Secrets Manager read by the job through its Pod Identity role.
   - Production uses its own keys, separate from the ones used for evals, so they can be revoked alone and their spend seen separately. The OpenRouter key has a credit limit set in OpenRouter, a little above the expected monthly spend plus any backfill.
 - **Apps project:**

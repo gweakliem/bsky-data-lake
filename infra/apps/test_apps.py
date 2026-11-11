@@ -1,6 +1,8 @@
 """Checks the apps stack's resources using Pulumi mocks (no cluster or AWS calls)."""
 
 import importlib.util
+import os
+import tempfile
 from pathlib import Path
 
 import pulumi
@@ -47,7 +49,9 @@ pulumi.runtime.set_config("bsky-apps:ingestImageTag", "def5678")
 pulumi.runtime.set_config("bsky-apps:silverImageTag", "fed4321")
 pulumi.runtime.set_config("bsky-apps:reportsImageTag", "ccc1111")
 pulumi.runtime.set_config("bsky-apps:embedImageTag", "eee2222")
-pulumi.runtime.set_config("bsky-apps:openrouterApiKey", "sk-or-test")
+_key_file = Path(tempfile.mkdtemp()) / "openrouter-key"
+_key_file.write_text("sk-or-test\n")
+os.environ["BSKY_OPENROUTER_KEY_FILE"] = str(_key_file)
 
 _spec = importlib.util.spec_from_file_location("apps_stack", Path(__file__).with_name("__main__.py"))
 apps = importlib.util.module_from_spec(_spec)
@@ -154,6 +158,16 @@ def test_embed_cronjob_starts_suspended_and_reads_its_key_from_a_secret():
         assert container["resources"]["limits"]["memory"] == container["resources"]["requests"]["memory"]
 
     return pulumi.Output.all(apps.embed.spec, apps.embed_key.metadata.name).apply(check)
+
+
+@pulumi.runtime.test
+def test_embed_key_comes_from_the_key_file_as_a_secret():
+    def check(args):
+        data, is_secret = args
+        assert data == {"OPENROUTER_API_KEY": "sk-or-test"}  # trailing newline stripped
+        assert is_secret
+
+    return pulumi.Output.all(apps.embed_key.string_data, pulumi.Output.is_secret(apps.openrouter_key)).apply(check)
 
 
 @pulumi.runtime.test

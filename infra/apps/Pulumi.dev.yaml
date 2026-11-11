@@ -4,3 +4,4 @@ config:
   bsky-apps:ingestImageTag: a287294
   bsky-apps:silverImageTag: 36b7137
   bsky-apps:reportsImageTag: 0eb411f
+  bsky-apps:embedImageTag: 04481b5

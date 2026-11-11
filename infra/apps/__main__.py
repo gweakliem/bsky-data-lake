@@ -8,6 +8,8 @@ rolling back is the same with the previous tag.
 """
 
 import hashlib
+import os
+from pathlib import Path
 
 import pulumi
 import pulumi_kubernetes as k8s
@@ -272,14 +274,27 @@ embed_sa = k8s.core.v1.ServiceAccount(
     opts=opts,
 )
 
-# The production OpenRouter key: `pulumi config set --secret openrouterApiKey`, so the
-# stack file holds only ciphertext. Rotating it is the same command plus `pulumi up`;
-# each run reads the Secret when its pod starts.
+# The production OpenRouter key, read at deploy time from a file outside the repo (as
+# the Pulumi passphrase is), so the public repo holds no form of it. Pulumi keeps it
+# only in the encrypted state. Rotating it: overwrite the file, `pulumi up`; each run
+# reads the Secret when its pod starts.
+openrouter_key_file = Path(
+    config.get("openrouterKeyFile")
+    or os.environ.get("BSKY_OPENROUTER_KEY_FILE")
+    or "~/.config/bsky-data-lake/openrouter-key"
+).expanduser()
+if not openrouter_key_file.is_file():
+    raise ValueError(
+        f"{openrouter_key_file} not found: put the production OpenRouter key there (mode 600), "
+        "or point openrouterKeyFile / BSKY_OPENROUTER_KEY_FILE at it"
+    )
+openrouter_key = pulumi.Output.secret(openrouter_key_file.read_text().strip())
+
 embed_key = k8s.core.v1.Secret(
     "embed-openrouter",
     metadata=k8s.meta.v1.ObjectMetaArgs(name="bsky-embed-openrouter", namespace=ns, labels=embed_labels),
     type="Opaque",
-    string_data={"OPENROUTER_API_KEY": config.require_secret("openrouterApiKey")},
+    string_data={"OPENROUTER_API_KEY": openrouter_key},
     opts=opts,
 )
 

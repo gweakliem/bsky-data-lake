@@ -16,13 +16,13 @@ POST = "app.bsky.feed.post"
 LIKE = "app.bsky.feed.like"
 ALICE, BOB = "did:plc:alice", "did:plc:bob"
 
-# The support tables, as C2 and E2 plan them (vectors are a fixed-size list there).
+# The support tables, as C2 and E2 plan them (vectors are float16 bytes).
 SUPPORT_DDL = {
     "post_classifications": """uri STRING, cid STRING, day DATE, model STRING, spec_version STRING,
-        classified_at TIMESTAMP, silver_processed_at TIMESTAMP, p_spam DOUBLE, p_adult DOUBLE,
+        classified_at TIMESTAMP, bronze_ingested_at TIMESTAMP, p_spam DOUBLE, p_adult DOUBLE,
         p_ai_generated DOUBLE, topic STRING, topic_confidence DOUBLE, topic_probs MAP<STRING, DOUBLE>""",
     "post_embeddings": """uri STRING, cid STRING, day DATE, model STRING, spec_version STRING,
-        embedded_at TIMESTAMP, silver_processed_at TIMESTAMP, vector ARRAY<FLOAT>""",
+        embedded_at TIMESTAMP, bronze_ingested_at TIMESTAMP, vector BINARY""",
 }
 
 
@@ -79,11 +79,11 @@ def support_rows() -> dict[str, list[tuple]]:
             (REPLY, "c3", day, "jev", "v0", at + dt.timedelta(hours=1), at, *scores),
         ],
         "post_embeddings": [
-            (DELETED, "c1", day, "m", "v1", at, at, [0.1, 0.2]),
-            (EDITED, "c2a", day, "m", "v1", at, at, [0.1, 0.2]),
+            (DELETED, "c1", day, "m", "v1", at, at, b"\x01\x02"),
+            (EDITED, "c2a", day, "m", "v1", at, at, b"\x01\x02"),
             # Embedded again after the edit.
-            (EDITED, "c2b", day, "m", "v1", at - dt.timedelta(hours=1), at, [0.3, 0.4]),
-            (REPLY, "c3", day, "m", "v1", at, at, [0.5, 0.6]),
+            (EDITED, "c2b", day, "m", "v1", at - dt.timedelta(hours=1), at, b"\x03\x04"),
+            (REPLY, "c3", day, "m", "v1", at, at, b"\x05\x06"),
         ],
     }
 

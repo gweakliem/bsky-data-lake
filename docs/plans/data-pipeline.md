@@ -30,7 +30,8 @@ New code:
 | Directory | Contents | Engine |
 |---|---|---|
 | `silver/` | uv project, the bronze → silver job | PySpark on Sail, as in `iceberg-loader/` |
-| `enrich/` | uv project with two entry points, `bsky-classify` and `bsky-embed`, plus shared incremental-read and write code | pyiceberg (Glue catalog) + pyarrow |
+| `enrich/` | uv project: `bsky-classify`, plus the incremental-read and write code the support jobs share | pyiceberg (Glue catalog) + pyarrow |
+| `embed/` | uv project: `bsky-embed` (E2) and the E1 harness, which needs torch only in its `eval` dependency group | pyiceberg (Glue catalog) + pyarrow |
 
 **Decide (E2/C2):** the support jobs are I/O-bound (API calls) or GPU-bound, not shuffle-heavy. pyiceberg reading and appending to Glue tables avoids running a Sail server for them. The default is pyiceberg; switch to Sail only if pyiceberg can't read or append what's needed.
 
@@ -40,8 +41,9 @@ These apply to every silver and support table.
 
 - **Locations:** all tables in the warehouse bucket under `iceberg/bsky_silver/<table>`, with an explicit `LOCATION` (Sail's Glue catalog has no warehouse setting). The Glue database `bsky_silver` is added in the data stack (D5 in the deployment plan, or earlier as a small infra change).
 - **Incremental processing by watermark:**
-  - Each output table carries the watermark column of its input: `bronze_ingested_at` in silver, `silver_processed_at` in support tables.
-  - A run processes input rows with watermark in `(max watermark already in output, now - 5 min]`. The 5-minute lag avoids racing an in-flight commit.
+  - Each output table carries the watermark column of its input: `bronze_ingested_at` in silver (bronze's `ingested_at`), and the same `bronze_ingested_at` in support tables, copied from the `posts` row. Silver has no ingestion time of its own (changed 2026-11-11 from a planned `silver_processed_at`; per-layer timing for observability is a separate metric, see D6 in the deployment plan).
+  - Silver processes bronze rows with watermark in `(max watermark already in output, now - 5 min]`. The 5-minute lag avoids racing an in-flight commit.
+  - Support jobs process `posts` rows with `bronze_ingested_at` in `(max in output, max bronze_through in silver_runs]`. Silver writes a window's `silver_runs` row only after its appends, so this never reads a half-committed window. They process and commit in `bronze_ingested_at` order, so a crash between chunks skips nothing; rows the prefilter skips are re-read and skipped again.
   - No separate state store; the output table is the state. Runs must be safe to repeat: writes are append, and readers dedupe as described below.
 - **Dedup key:** silver commit-derived records are keyed by `(did, collection, rkey)`. Keep the row with the highest `rev`, then the highest `time_us`. Jetstream cursor replay (P1) produces exact duplicates, so this is required, not optional.
 - **Deletes:**
@@ -238,7 +240,7 @@ Prerequisite for unattended running and for D4.
 - **Depends on:** C1, S3.
 - **Goal:** `bsky-classify` reads new rows from `posts_current` and writes `post_classifications`.
 - **Columns:**
-  - `uri`, `cid`, `day`, `model`, `spec_version`, `classified_at`, `silver_processed_at`;
+  - `uri`, `cid`, `day`, `model`, `spec_version`, `classified_at`, `bronze_ingested_at`;
   - `p_spam`, `p_adult`, `p_ai_generated`;
   - `topic`, `topic_confidence`, and `topic_probs` (map<string,double>).
 
@@ -289,13 +291,13 @@ Prerequisite for unattended running and for D4.
 
 - **Depends on:** E1, S3.
 - **Goal:** `bsky-embed` reads new rows from `posts_current` and writes `post_embeddings`.
-- **Columns:** `uri`, `cid`, `day`, `model`, `spec_version`, `embedded_at`, `silver_processed_at`, and `vector` (`binary`: 1,024 little-endian float16 values, L2-normalized, 2,048 bytes; see Vector storage).
+- **Columns:** `uri`, `cid`, `day`, `model`, `spec_version`, `embedded_at`, `bronze_ingested_at`, and `vector` (`binary`: 1,024 little-endian float16 values, L2-normalized, 2,048 bytes; see Vector storage).
 - **Behavior:** the same prefilter, chunked commits, watermark and idempotency rules as C2. Embeddings come from the OpenRouter API (E1's choice), in concurrent batches with retries, so the job needs no GPU; cache vectors by text hash so identical text is embedded once.
 - **Language: Python (decided 2026-11-11), with pyiceberg + pyarrow (the support-job default under Layout), not Sail.** The job waits on the API, Arrow and Parquet work is native code, and `text_spec` stays shared with the E1 harness (and C2 with the TypeSafe SDK).
   - Rust (as the ingestor) is the fallback if the measurement below shows real cost, or if E2 becomes an always-on near-real-time service. Before a full rewrite, consider a PyO3 extension for one hot path.
   - Cheap Python savings to try first: request base64 vectors from the API if OpenRouter supports it (JSON parsing of 4,096 floats a post is the main CPU cost), and truncate to 1,024 dims before anything else touches them.
 - **To settle before code:**
-  - **Reading (decided 2026-11-11):** `posts_current` is a portable SQL view, so scan `posts` by `silver_processed_at` watermark and drop URIs in `deletes`, via pyiceberg or DuckDB (as `embed/corpus.py`).
+  - **Reading (decided 2026-11-11):** `posts_current` is a portable SQL view, so scan `posts` by the `bronze_ingested_at` watermark (see Shared conventions) and drop URIs in `deletes`, via pyiceberg.
   - **Vector storage: float16 bytes in a `binary` column (decided 2026-11-11).** Iceberg has no float16 type, and `list<float32>` at 1,024 dims would be about 12 GB a day; this is half that. Vectors are truncated to 1,024 dims, then L2-normalized, then cast to float16, as in E1 (normalize after truncating, since truncation breaks unit length). Readers decode with `np.frombuffer(b, '<f2')`. The cost is that SQL engines see opaque bytes, which is fine since nothing does vector math in SQL. `post_embeddings` is the source of truth and LanceDB (E3) is loaded from it.
   - **Throughput:** E1 measured 60 posts/s at concurrency 6 (96 inputs a request), about 13 hours for a day's 2.9M posts. Run at about 20 and plan the backfill of days already in silver.
     - **Rate limits (checked 2026-11-11):** OpenRouter's 20 requests/minute and 1,000/day caps apply only to `:free` model variants. Paid models such as `qwen/qwen3-embedding-8b` have no platform-level request cap. A day's posts is about 30,000 requests at 96 inputs each, so the job must never use a `:free` ID.

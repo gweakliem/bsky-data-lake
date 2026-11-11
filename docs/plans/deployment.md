@@ -232,6 +232,7 @@ D4 is split so the loader, which recovers easily, is the first workload deployed
   | Poison messages | DLQ `ApproximateNumberOfMessagesVisible` > 0 | a file or notification failing repeatedly |
   | Job failures | Kubernetes Job failures (Container Insights metric or kube-state-metrics) | a silver, classify or embed run failed |
 
+- **Pipeline latency (backlog, raised 2026-11-11):** how long each layer takes, from Jetstream to bronze, silver, and the classify and embed tables, and each job's run time. Kept as metrics (for example a CloudWatch metric per job from its run log line), not as ingestion-time columns in every table. Silver already logs per-window timing.
 - **Cost:**
   - An AWS Budget with monthly alerts at 50/80/100%.
   - Classify's own `--max-input-tokens` is the control for Jev spend. Also log the daily token totals, and add a CloudWatch metric from them if spend needs watching.

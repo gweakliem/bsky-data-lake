@@ -3,13 +3,13 @@ import math
 
 import numpy as np
 
-from bsky_embed import corpus, report, search
+from bsky_embed import report, search, spec
 
 
 def test_text_spec_v1_joins_text_alts_and_link_title():
     row = {"text": " hello ", "image_alts": ["a cat", ""], "external_title": "Cats"}
-    assert corpus.text(row) == "hello\na cat\nCats"
-    assert corpus.text({"text": None, "image_alts": None, "external_title": None}) == ""
+    assert spec.text(row) == "hello\na cat\nCats"
+    assert spec.text({"text": None, "image_alts": None, "external_title": None}) == ""
 
 
 def test_top_k_orders_by_score():

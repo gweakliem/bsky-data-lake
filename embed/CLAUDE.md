@@ -1,6 +1,6 @@
 # embed
 
-Embedding model selection (WP E1); the embedding job (E2) comes later. A uv project that depends on `../enrich` (editable) for the lake connection, the eligibility rule and the terminal key reader. Run commands from this directory.
+Embedding model selection (WP E1) and the embedding job (E2, in progress). A uv project that depends on `../enrich` (editable) for the lake connection, the eligibility rule and the terminal key reader. Run commands from this directory. The E1 harness's heavy dependencies (torch, sentence-transformers, scikit-learn, bm25s) are in the `eval` group, which `dev` includes, so `uv sync --no-dev` (the job's image) leaves them out.
 
 ```bash
 uv sync
@@ -22,4 +22,5 @@ uv run python -m bsky_embed.report             # the numbers; --clusters MODEL t
 - **Queries (`eval/queries.jsonl`, committed):** 48, grouped by `kind`: English news, everyday, entertainment and commerce; `native` (Japanese, Spanish, Portuguese, German, French); and `cross` (an English query whose matches are mostly in another language).
 - **Judging:** the pool is every system's top 10 per query. Jev judges each pair with one Noul (`judge.RELEVANT`), in any language, and `p >= 0.5` counts as relevant; the hand sample (English pairs only, spread over Jev's probabilities, shown without them) measures how far to trust that. `eval/judgments-jev.jsonl` and `eval/judgments-hand.jsonl` are committed with query ids, URIs and answers only. A pair is re-judged when its query's text changes. Recall is against the pool, so adding a system can lower the others' recall.
 - **Clustering:** k-means, k=40, on each model's post vectors. Topic AMI against C1's hand topics is a rough signal (about 140 English posts). The language-split share is the share of non-English posts in clusters at least 80% one non-English language: high means the model groups by language rather than subject.
+- **E2 so far:** `spec.py` is embedding spec v1 (text_spec v1, `qwen/qwen3-embedding-8b`, 1,024 dims, vectors truncated, then L2-normalized, then stored as little-endian float16 bytes). `client.py` is the OpenRouter client the job and E1 share: it retries 5xx, dropped connections and 429s (honoring `Retry-After`), treats 400/401/402/403 as fatal, and refuses `:free` model ids. Tests use `httpx.MockTransport`.
 - **Gotchas:** DuckDB reading a whole day of silver over S3 fails to connect at the default thread count; `corpus` sets `threads = 8`. nomic-embed-text-v2-moe needs `trust_remote_code` and `einops`.

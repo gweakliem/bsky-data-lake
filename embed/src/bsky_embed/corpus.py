@@ -13,6 +13,7 @@ import json
 import sys
 from pathlib import Path
 
+from bsky_embed.spec import text
 from bsky_enrich import lake, spec
 from bsky_enrich.sample import SAMPLE
 
@@ -22,12 +23,7 @@ CORPUS = CACHE / "corpus.jsonl"
 DAY = "2026-11-09"
 SIZE = 100_000
 SEED = "e1"
-TEXT_SPEC = "v1"
-
-
-def text(row: dict) -> str:
-    parts = [row["text"] or "", *(row["image_alts"] or []), row["external_title"] or ""]
-    return "\n".join(p.strip() for p in parts if p and p.strip())
+TEXT_SPEC = "v1"  # bsky_embed.spec.text
 
 
 def load() -> list[dict]:

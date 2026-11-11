@@ -15,22 +15,20 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
 import sys
 import time
 
 import numpy as np
 
-from bsky_embed import corpus
+from bsky_embed import corpus, spec
 from bsky_embed.models import MODELS, Model
 
 VECTORS = corpus.CACHE / "vectors"
 MAX_TOKENS = 256  # posts are at most 300 characters plus alt texts; caps long-context models
-OPENROUTER = "https://openrouter.ai/api/v1/embeddings"
 
 
 def normalize(v: np.ndarray) -> np.ndarray:
-    return v / np.linalg.norm(v, axis=1, keepdims=True).clip(1e-12)
+    return spec.normalize(v)
 
 
 def local_model(m: Model, device: str):
@@ -54,47 +52,14 @@ def encode_local(st, texts: list[str], prompt: str, batch_size: int = 64) -> np.
 
 async def encode_hosted(m: Model, texts: list[str], prompt: str, batch: int = 96, concurrency: int = 6) -> tuple[np.ndarray, int, float]:
     """Vectors, prompt tokens and the cost OpenRouter reports (USD)."""
-    import httpx
     from dotenv import load_dotenv
 
+    from bsky_embed.client import OpenRouter
+
     load_dotenv(corpus.EVAL.parents[1] / ".env")
-    headers = {"Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}"}
-    gate = asyncio.Semaphore(concurrency)
-    chunks = [texts[i : i + batch] for i in range(0, len(texts), batch)]
-    out: list[list[list[float]] | None] = [None] * len(chunks)
-    totals = {"tokens": 0, "cost": 0.0, "done": 0}
-
-    async with httpx.AsyncClient(timeout=120) as client:
-
-        async def one(i: int) -> None:
-            # The API rejects empty strings; a few link posts have no text and no link title (3 in 100k).
-            body = {"model": m.id, "input": [(prompt + t) or " " for t in chunks[i]], "encoding_format": "float"}
-            for attempt in range(8):
-                try:
-                    async with gate:
-                        r = await client.post(OPENROUTER, headers=headers, json=body)
-                except httpx.TransportError as e:  # dropped connections and DNS failures: retry like a 5xx
-                    print(f"  {m.name}: batch {i}: {type(e).__name__}, retrying", file=sys.stderr)
-                    await asyncio.sleep(min(2**attempt, 60))
-                    continue
-                if r.status_code == 200 and "data" in (j := r.json()):
-                    data = sorted(j["data"], key=lambda d: d["index"])
-                    out[i] = [d["embedding"] for d in data]
-                    usage = j.get("usage") or {}
-                    totals["tokens"] += usage.get("prompt_tokens") or 0
-                    totals["cost"] += usage.get("cost") or 0.0
-                    totals["done"] += 1
-                    if totals["done"] % 100 == 0:
-                        print(f"  {m.name}: {totals['done']}/{len(chunks)} batches", file=sys.stderr)
-                    return
-                if r.status_code in (400, 401, 402, 403):
-                    raise RuntimeError(f"{m.name}: {r.status_code} {r.text[:300]}")
-                await asyncio.sleep(min(2**attempt, 60))
-            raise RuntimeError(f"{m.name}: batch {i} kept failing")
-
-        await asyncio.gather(*(one(i) for i in range(len(chunks))))
-    v = np.array([e for chunk in out for e in chunk], dtype=np.float32)
-    return normalize(v), totals["tokens"], totals["cost"]
+    async with OpenRouter.from_env(m.id, batch=batch, concurrency=concurrency) as client:
+        v = await client.embed(texts, prompt)
+    return normalize(v), client.usage.prompt_tokens, client.usage.cost_usd
 
 
 def encode(m: Model, texts: list[str], kind: str, st=None) -> np.ndarray:

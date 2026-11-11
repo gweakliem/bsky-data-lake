@@ -9,7 +9,7 @@
 -- belong in C3's views, not here.
 SELECT
     uri, cid, current_cid, cid <> current_cid AS stale, day, model, spec_version, classified_at,
-    silver_processed_at, p_spam, p_adult, p_ai_generated, topic, topic_confidence, topic_probs
+    bronze_ingested_at, p_spam, p_adult, p_ai_generated, topic, topic_confidence, topic_probs
 FROM (
     SELECT
         c.*,

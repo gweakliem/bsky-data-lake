@@ -6,7 +6,7 @@
 -- Deleted posts drop out with posts_current.
 SELECT
     uri, cid, current_cid, cid <> current_cid AS stale, day, model, spec_version, embedded_at,
-    silver_processed_at, vector
+    bronze_ingested_at, vector
 FROM (
     SELECT
         e.*,

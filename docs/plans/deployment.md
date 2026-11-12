@@ -179,12 +179,12 @@ D4 is split so the loader, which recovers easily, is the first workload deployed
 ## WP D5: pipeline jobs and maintenance
 
 - **Depends on:** D4. Each job is added once its pipeline WP (S2, C2, E2, E3) is done.
-- **Embed (applied 2026-11-11; CronJob suspended until the backfill finishes):**
+- **Embed (applied 2026-11-11; live 2026-11-12 at 22:53Z):**
   - Checked in the cluster: a one-off `--dry-run` Job from the CronJob's template read the table's watermark and a full window of posts through Pod Identity (Glue via boto3, S3 via pyarrow).
-  - **To go live** once the laptop backfill reports caught up: `pulumi config set embedSuspend false` in `infra/apps` and `embedAlarmActions true` in `infra/`, then apply both (data first). The first scheduled run should commit the hours since the backfill ended.
+  - **Went live** once the laptop backfill caught up (22:38Z): `embedAlarmActions true` in `infra/`, then `embedSuspend false` in `infra/apps`. Unsuspending started the missed 22:20Z run at once, which picked up from the backfill's watermark.
   - Data stack: role `bsky-embed`, which reads only `posts`, `deletes` and `silver_runs` and writes only `post_embeddings` (Glue `CreateTable`/`UpdateTable` on that table alone), and the alarm `bsky-embed-stalled` on a log metric of committed chunks. The alarm's notifications stay off (`embedAlarmActions`) until the CronJob runs.
   - Platform stack: ECR repository `embed` and the Pod Identity association for service account `embed`.
-  - Apps stack: the CronJob `embed` at `:20`, suspended (`embedSuspend`, default true) while the first backfill runs from a laptop, since two writers would embed the same posts twice. It runs with a 2.5 Gi memory limit (requests equal to limits), `--concurrency 60` and `--chunk-posts 20000`. The key is in the Secret `bsky-embed-openrouter`, read at deploy time from `~/.config/bsky-data-lake/openrouter-key`.
+  - Apps stack: the CronJob `embed` at `:20`, suspended (`embedSuspend`, default true) while the first backfill runs from a laptop, since two writers would embed the same posts twice. It runs with a 4 Gi memory limit (requests equal to limits; raised from 2.5 Gi after the backfill's last pass, an hour of silver, peaked at 2.2 GB), `--concurrency 60` and `--chunk-posts 20000`. The key is in the Secret `bsky-embed-openrouter`, read at deploy time from `~/.config/bsky-data-lake/openrouter-key`.
   - No Glue optimizer for `post_embeddings` yet: it gets a few files an hour. Revisit with M2 in `account-management.md`.
 - **Data project:**
   - Glue database `bsky_silver` (location `iceberg/bsky_silver` in the warehouse bucket).

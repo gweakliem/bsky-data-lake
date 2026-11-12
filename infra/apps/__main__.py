@@ -258,9 +258,10 @@ silver = k8s.batch.v1.CronJob(
 embed_labels = {"app.kubernetes.io/name": "embed", "app.kubernetes.io/part-of": "bsky-data-lake"}
 embed_image_tag = config.require("embedImageTag")
 embed_image = repository_urls.apply(lambda urls: f"{urls['embed']}:{embed_image_tag}")
-# Memory is mostly one silver window's posts: about 0.9 GB for the largest (backlog)
-# windows, 1.2-2.0 GB with a chunk of vectors in flight (measured 2026-11-11).
-embed_memory_limit = config.get("embedMemoryLimit") or "2560Mi"
+# Memory is mostly one silver window's posts plus a chunk of vectors in flight, and
+# grows across windows within a run: an hour of silver (185k posts, 4 windows)
+# peaked at 2.2 GB on the backfill's last pass (2026-11-12).
+embed_memory_limit = config.get("embedMemoryLimit") or "4Gi"
 embed_concurrency = config.get_int("embedConcurrency") or 60
 embed_chunk_posts = config.get_int("embedChunkPosts") or 20_000
 # Suspended while a backfill runs elsewhere: two writers would embed the same

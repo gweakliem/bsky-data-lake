@@ -11,4 +11,5 @@ config:
   # IAM roles and policies are created within the delegated scope set up in
   # iam-bootstrap/ (BskyDataLakeDeveloper permission set).
   bsky-data-lake:manageIam: "true"
+  bsky-data-lake:embedAlarmActions: "true"
 encryptionsalt: v1:DK4jAg2SzZc=:v1:k8MlwSJH+6h4fdUQ:irUSNmDlRrnaOAiu7pe2/2yl+k5q+A==

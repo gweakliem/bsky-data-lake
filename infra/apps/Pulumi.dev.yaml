@@ -11,3 +11,4 @@ config:
   bsky-apps:reportsDuckdbMemory: 10GB
   bsky-apps:indexSuspend: "false"
   bsky-apps:searchReplicas: "1"
+  bsky-apps:indexMemoryLimit: 12Gi

@@ -32,6 +32,7 @@ New code:
 | `silver/` | uv project, the bronze → silver job | PySpark on Sail, as in `iceberg-loader/` |
 | `enrich/` | uv project: `bsky-classify`, plus the incremental-read and write code the support jobs share | pyiceberg (Glue catalog) + pyarrow |
 | `embed/` | uv project: `bsky-embed` (E2) and the E1 harness, which needs torch only in its `eval` dependency group | pyiceberg (Glue catalog) + pyarrow |
+| `search/` | uv project: `bsky-index` (the E3 index job) and `bsky-search` (query CLI and API) | LanceDB on S3, pyiceberg reads |
 
 **Decide (E2/C2):** the support jobs are I/O-bound (API calls) or GPU-bound, not shuffle-heavy. pyiceberg reading and appending to Glue tables avoids running a Sail server for them. The default is pyiceberg; switch to Sail only if pyiceberg can't read or append what's needed.
 
@@ -313,11 +314,25 @@ Prerequisite for unattended running and for D4.
 
 - **Depends on:** E2, and C2 for filters (the index can ship without them and add filters later).
 - **Goal:** hybrid search over posts.
+- **Status: in progress (2026-11-13).** The index job, hybrid query, API and CLI are written and tested; see `search/CLAUDE.md`. The acceptance eval on the E1 query set (`docs/plans/notes/search-eval.md`): hybrid (weighted RRF, 0.9 vector / 0.1 BM25) scores nDCG@10 0.91 against vector-only's 0.92 and exact search's 0.91, a tie within noise. Equal-weight RRF scored 0.85 and LanceDB's built-in hybrid 0.79. A test run from the laptop indexed about 105k posts into a scratch prefix and answered queries over S3. Next: the in-cluster build and deployment (D5).
 - **Index:**
   - LanceDB on S3 (default), holding the vectors plus a full-text index over `text`, with filter columns `day`, `langs`, `topic`, `is_spam` and `is_adult` from C3.
   - Built incrementally from `post_embeddings_current` joined to `posts_current` and `post_classifications_current`.
   - It is a derived copy: a full rebuild must be a supported command.
   - **Decide:** LanceDB or OpenSearch. LanceDB is the default because it fits the lake and has no server. Choose OpenSearch only if concurrent query load or keyword-ranking needs call for it.
+  - **Window: the last 30 days, rolling (decided 2026-11-12).** The writer deletes rows whose `day` falls out of the window; `post_embeddings` stays the full archive. At about 2.9M posts a day that is about 87M rows: about 180 GB of float16 vectors on S3, and about 5.6 GB of IVF-PQ codes (64 bytes a vector) for the query pod to cache, so one pod of about 6-8 Gi. Full history (about 1B rows a year, 64 GB of codes) would need a different serving design.
+  - **Deployment (planned 2026-11-12):** LanceDB is a library, not a server. The index is a Lance dataset in the warehouse bucket (`lance/posts_v1/`; a rebuild writes a new path and the service switches). A `bsky-index` CronJob (hourly, after embed, `Forbid`, so a single writer) appends new rows by the `bronze_ingested_at` watermark, removes deleted `uri`s and expired days, refreshes the indexes and compacts. The query service is a FastAPI Deployment with a ClusterIP Service, reached by `kubectl port-forward` like the reports site, opening the dataset read-only and reloading it after each writer run. Reads go through the VPC's S3 gateway endpoint, not the NAT gateway. The writer's role writes only the Lance prefix; the service's reads only it.
+  - **Initial build and rebuild (2026-11-13):** `bsky-index --rebuild --no-maintain`, then `--reindex` to build every index on the full table.
+    - **Why it isn't the hourly path:** the first in-cluster load used it, and two problems showed up.
+      - Spans are cut by ingest time, and an ingest catch-up after the ingestor was paused put 2.5M posts into one hour (2026-11-02 12:00). That span was OOMKilled at 8Gi, so spans over 200k embeddings are now split by time (`--max-span-rows`).
+      - Per-span table deletes scan the whole `uri` column while it has no index, so pieces slowed linearly (21 s per 100k rows at 0.2M rows, 47 s at 4.7M).
+    - **What the rebuild does instead:** it reads every post delete (as sorted 64-bit uri hashes) and each edited post's newest version up front. It leaves those rows out before appending, so the load does no table deletes.
+    - **In place, for now:** it drops the dataset and rebuilds at the same path, which is fine while the API is down. For a rebuild under a live API, write to a new path and switch the service, as planned above.
+  - **Known issue: scale (raised 2026-11-13).** The sizes above are at 2026-11 traffic. At twice that traffic (plausible within a year), 30 days is about 175M rows.
+    - **Rebuild time:** at the first build's rate (about 3.3k rows/s), a rebuild takes about 15 hours, past the Job's 12-hour deadline. It would need to be resumable across Jobs, or to load in parallel.
+    - **Query memory:** the IVF-PQ codes reach about 11 GB. Either Lance's partition cache serves probed partitions from S3 (to be checked on the real index), or the pod needs fewer sub-vectors (32), more memory or sharding.
+    - **Delete set:** the hashes are about 120 MB, so this is not a problem.
+    - Revisit when daily posts pass about 4M.
 - **Query:**
   - Combine BM25 and vector scores (reciprocal rank fusion). On the E1 query set, also try a tuned weighted sum, and bge-m3's sparse weights instead of BM25 for non-English and cross-language queries (see `docs/plans/notes/embedding-eval.md`).
   - Exclude spam and adult content by default.

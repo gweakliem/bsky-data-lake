@@ -15,6 +15,9 @@ FLUENT_BIT_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/bsky/bsky-fluent-bit"
 SILVER_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/bsky/bsky-silver"
 REPORTS_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/bsky/bsky-reports"
 EMBED_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/bsky/bsky-embed"
+INDEX_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/bsky/bsky-index"
+SEARCH_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/bsky/bsky-search"
+CLOUDWATCH_AGENT_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/bsky/bsky-cloudwatch-agent"
 BOUNDARY_ARN = f"arn:aws:iam::{ACCOUNT}:policy/bsky-workload-boundary"
 
 
@@ -35,6 +38,9 @@ class Mocks(pulumi.runtime.Mocks):
                     "silver_role_arn": SILVER_ROLE_ARN,
                     "reports_role_arn": REPORTS_ROLE_ARN,
                     "embed_role_arn": EMBED_ROLE_ARN,
+                    "index_role_arn": INDEX_ROLE_ARN,
+                    "search_role_arn": SEARCH_ROLE_ARN,
+                    "cloudwatch_agent_role_arn": CLOUDWATCH_AGENT_ROLE_ARN,
                 }
             }
         self.resources[args.typ].append(state)
@@ -172,7 +178,7 @@ def test_ecr_scans_and_expires():
         assert [r["selection"]["tagStatus"] for r in rules] == ["untagged", "tagged"]
 
     repo = platform.repositories["iceberg-loader"]
-    assert sorted(platform.repositories) == ["embed", "iceberg-loader", "ingest", "reports", "silver"]
+    assert sorted(platform.repositories) == ["embed", "iceberg-loader", "ingest", "reports", "search", "silver"]
     lifecycle = mocks.resources["aws:ecr/lifecyclePolicy:LifecyclePolicy"][0]
     return pulumi.Output.all(repo.image_scanning_configuration, lifecycle["policy"]).apply(check)
 
@@ -218,3 +224,30 @@ def test_reports_pod_identity_uses_data_stack_role():
 
     a = platform.pod_identities["reports"]
     return pulumi.Output.all(a.namespace, a.service_account, a.role_arn).apply(check)
+
+
+@pulumi.runtime.test
+def test_index_and_search_pod_identities_use_data_stack_roles():
+    def check(args):
+        assert args == ["bsky", "index", INDEX_ROLE_ARN, "bsky", "search", SEARCH_ROLE_ARN]
+
+    i, s = platform.pod_identities["index"], platform.pod_identities["search"]
+    return pulumi.Output.all(i.namespace, i.service_account, i.role_arn, s.namespace, s.service_account, s.role_arn).apply(check)
+
+
+@pulumi.runtime.test
+def test_observability_addons_collect_metrics_only():
+    def check(args):
+        names, config, associations = args
+        assert names == ["metrics-server", "amazon-cloudwatch-observability"]
+        config = json.loads(config)
+        # Our Fluent Bit ships container logs; the add-on's would duplicate them.
+        assert config["containerLogs"] == {"enabled": False}
+        assert config["applicationSignals"] == {"enabled": False}
+        assert "agent" not in config  # the default agent config is enhanced observability
+        assert [(a["service_account"], a["role_arn"]) for a in associations] == [
+            ("cloudwatch-agent", CLOUDWATCH_AGENT_ROLE_ARN)]
+
+    m, c = platform.metrics_server, platform.cloudwatch_observability
+    return pulumi.Output.all(pulumi.Output.all(m.addon_name, c.addon_name), c.configuration_values,
+                             c.pod_identity_associations).apply(check)

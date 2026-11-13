@@ -12,6 +12,7 @@ INGEST_REPO_URL = "123456789012.dkr.ecr.us-west-2.amazonaws.com/bsky/ingest"
 SILVER_REPO_URL = "123456789012.dkr.ecr.us-west-2.amazonaws.com/bsky/silver"
 REPORTS_REPO_URL = "123456789012.dkr.ecr.us-west-2.amazonaws.com/bsky/reports"
 EMBED_REPO_URL = "123456789012.dkr.ecr.us-west-2.amazonaws.com/bsky/embed"
+SEARCH_REPO_URL = "123456789012.dkr.ecr.us-west-2.amazonaws.com/bsky/search"
 STACK_OUTPUTS = {
     "kubeconfig": "{}",
     "namespace": "bsky",
@@ -21,6 +22,7 @@ STACK_OUTPUTS = {
         "silver": SILVER_REPO_URL,
         "reports": REPORTS_REPO_URL,
         "embed": EMBED_REPO_URL,
+        "search": SEARCH_REPO_URL,
     },
     "queue_url": "https://sqs.us-west-2.amazonaws.com/123456789012/bsky-raw-files",
     "raw_table_location": "s3://test-warehouse/iceberg/bsky_raw/jetstream",
@@ -28,6 +30,7 @@ STACK_OUTPUTS = {
     "logging_namespace": "logging",
     "container_log_group": "/bsky/containers",
     "silver_location": "s3://test-warehouse/iceberg/bsky_silver",
+    "lance_uri": "s3://test-warehouse/lance",
     "reports_site_url": "s3://test-warehouse/reports",
     "reports_role_arn": "arn:aws:iam::123456789012:role/bsky/bsky-reports",
 }
@@ -49,6 +52,7 @@ pulumi.runtime.set_config("bsky-apps:ingestImageTag", "def5678")
 pulumi.runtime.set_config("bsky-apps:silverImageTag", "fed4321")
 pulumi.runtime.set_config("bsky-apps:reportsImageTag", "ccc1111")
 pulumi.runtime.set_config("bsky-apps:embedImageTag", "eee2222")
+pulumi.runtime.set_config("bsky-apps:searchImageTag", "aaa3333")
 _key_file = Path(tempfile.mkdtemp()) / "openrouter-key"
 _key_file.write_text("sk-or-test\n")
 os.environ["BSKY_OPENROUTER_KEY_FILE"] = str(_key_file)
@@ -241,3 +245,55 @@ def test_reports_web_serves_the_synced_site_privately():
         assert "try_files $uri $uri.html" in apps.reports_nginx_conf
 
     return pulumi.Output.all(apps.reports_web.spec, apps.reports_service.spec).apply(check)
+
+
+@pulumi.runtime.test
+def test_index_cronjob_starts_suspended_and_writes_lance():
+    def check(spec):
+        assert spec["schedule"] == "40 * * * *" and spec["suspend"] is True
+        assert spec["concurrency_policy"] == "Forbid"
+        pod = spec["job_template"]["spec"]["template"]["spec"]
+        assert pod["service_account_name"] == "index"
+        (container,) = pod["containers"]
+        assert container["image"] == f"{SEARCH_REPO_URL}:aaa3333" and container["command"] == ["bsky-index"]
+        env = {e["name"]: e.get("value") for e in container["env"]}
+        assert env["BSKY_LANCE_URI"] == "s3://test-warehouse/lance"
+        assert env["BSKY_SILVER_LOCATION"] == STACK_OUTPUTS["silver_location"]
+        assert int(env["LANCE_MEM_POOL_SIZE"]) == 2 * 2**30
+        # No API key: the index job doesn't embed.
+        assert "OPENROUTER_API_KEY" not in env
+
+    return apps.index.spec.apply(check)
+
+
+@pulumi.runtime.test
+def test_search_api_starts_at_zero_replicas_with_its_key_from_a_secret():
+    def check(args):
+        spec, service = args
+        assert spec["replicas"] == 0
+        pod = spec["template"]["spec"]
+        assert pod["service_account_name"] == "search"
+        (container,) = pod["containers"]
+        assert container["image"] == f"{SEARCH_REPO_URL}:aaa3333"
+        env = {e["name"]: e for e in container["env"]}
+        assert env["BSKY_LANCE_URI"]["value"] == "s3://test-warehouse/lance"
+        assert env["OPENROUTER_API_KEY"]["value_from"]["secret_key_ref"]["name"] == "bsky-search-openrouter"
+        assert container["readiness_probe"]["http_get"]["path"] == "/healthz"
+        assert service["type"] == "ClusterIP"
+
+    return pulumi.Output.all(apps.search.spec, apps.search_service.spec).apply(check)
+
+
+@pulumi.runtime.test
+def test_event_exporter_reads_only_bsky_events():
+    def check(args):
+        spec, rules, conf = args
+        pod = spec["template"]["spec"]
+        assert pod["service_account_name"] == "event-exporter"
+        (container,) = pod["containers"]
+        assert container["image"].startswith("ghcr.io/resmoio/kubernetes-event-exporter:v")  # pinned, not latest
+        # A namespaced Role on events alone: no ClusterRole, no access to other objects.
+        assert rules == [{"api_groups": [""], "resources": ["events"], "verbs": ["get", "list", "watch"]}]
+        assert "namespace: bsky" in conf["config.yaml"] and "omitLookup: true" in conf["config.yaml"]
+
+    return pulumi.Output.all(apps.event_exporter.spec, apps.event_exporter_role.rules, apps.event_exporter_config.data).apply(check)

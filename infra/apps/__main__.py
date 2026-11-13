@@ -360,6 +360,241 @@ embed = k8s.batch.v1.CronJob(
     opts=opts,
 )
 
+# --- Search: the index job and the query API (search/, WP E3) ---
+# One image, bsky/search. The index CronJob is the Lance dataset's only writer;
+# the API opens it read-only and picks up new versions within a minute.
+
+index_labels = {"app.kubernetes.io/name": "index", "app.kubernetes.io/part-of": "bsky-data-lake"}
+search_labels = {"app.kubernetes.io/name": "search", "app.kubernetes.io/part-of": "bsky-data-lake"}
+search_image_tag = config.require("searchImageTag")
+search_image = repository_urls.apply(lambda urls: f"{urls['search']}:{search_image_tag}")
+lance_uri = data.require_output("lance_uri")
+# An hour of posts (about 185k rows, 380 MB of vectors) plus the join and the
+# index upkeep. Not yet measured in the cluster.
+index_memory_limit = config.get("indexMemoryLimit") or "8Gi"
+# Suspended until the initial build (a one-off Job) has run.
+index_suspend = config.get_bool("indexSuspend", True)
+# The API holds the IVF-PQ codes (64 bytes a row, about 5.6 GB for 30 days at
+# full size) and caches the full-text index. 0 replicas until the table exists:
+# the API fails at startup without it.
+search_memory_limit = config.get("searchMemoryLimit") or "8Gi"
+search_replicas = config.get_int("searchReplicas") or 0
+
+# The names must match the platform stack's Pod Identity associations.
+index_sa = k8s.core.v1.ServiceAccount(
+    "index", metadata=k8s.meta.v1.ObjectMetaArgs(name="index", namespace=ns), opts=opts
+)
+search_sa = k8s.core.v1.ServiceAccount(
+    "search", metadata=k8s.meta.v1.ObjectMetaArgs(name="search", namespace=ns), opts=opts
+)
+
+# The API embeds each query with the same key as embed's (the same key file).
+search_key = k8s.core.v1.Secret(
+    "search-openrouter",
+    metadata=k8s.meta.v1.ObjectMetaArgs(name="bsky-search-openrouter", namespace=ns, labels=search_labels),
+    type="Opaque",
+    string_data={"OPENROUTER_API_KEY": openrouter_key},
+    opts=opts,
+)
+
+index = k8s.batch.v1.CronJob(
+    "index",
+    metadata=k8s.meta.v1.ObjectMetaArgs(name="index", namespace=ns, labels=index_labels),
+    spec=k8s.batch.v1.CronJobSpecArgs(
+        # :40, after embed's :20 run has committed the previous hour's posts.
+        schedule="40 * * * *",
+        time_zone="Etc/UTC",
+        suspend=index_suspend,
+        # The dataset has no commit coordination beyond this: one writer at a time.
+        concurrency_policy="Forbid",
+        successful_jobs_history_limit=3,
+        failed_jobs_history_limit=3,
+        job_template=k8s.batch.v1.JobTemplateSpecArgs(
+            metadata=k8s.meta.v1.ObjectMetaArgs(labels=index_labels),
+            spec=k8s.batch.v1.JobSpecArgs(
+                backoff_limit=2,
+                # A run cut short resumes from its last recorded span.
+                active_deadline_seconds=55 * 60,
+                template=k8s.core.v1.PodTemplateSpecArgs(
+                    metadata=k8s.meta.v1.ObjectMetaArgs(
+                        labels=index_labels, annotations={"karpenter.sh/do-not-disrupt": "true"}
+                    ),
+                    spec=k8s.core.v1.PodSpecArgs(
+                        service_account_name=index_sa.metadata.name,
+                        restart_policy="Never",
+                        security_context=pod_security,
+                        containers=[
+                            k8s.core.v1.ContainerArgs(
+                                name="index",
+                                image=search_image,
+                                command=["bsky-index"],
+                                env=[
+                                    k8s.core.v1.EnvVarArgs(
+                                        name="BSKY_SILVER_LOCATION", value=data.require_output("silver_location")
+                                    ),
+                                    k8s.core.v1.EnvVarArgs(name="BSKY_LANCE_URI", value=lance_uri),
+                                    k8s.core.v1.EnvVarArgs(name="AWS_REGION", value=region),
+                                    # Lance's sort pool (default 300 MB) is separate from the pod limit; a BTree
+                                    # build over 37M uris ran it out, since the final merge can't spill.
+                                    k8s.core.v1.EnvVarArgs(name="LANCE_MEM_POOL_SIZE", value=str(2 * 2**30)),
+                                ],
+                                resources=k8s.core.v1.ResourceRequirementsArgs(
+                                    requests={"cpu": "1", "memory": index_memory_limit},
+                                    limits={"memory": index_memory_limit},
+                                ),
+                                security_context=container_security,
+                            )
+                        ],
+                    ),
+                ),
+            ),
+        ),
+    ),
+    opts=opts,
+)
+
+search = k8s.apps.v1.Deployment(
+    "search",
+    metadata=k8s.meta.v1.ObjectMetaArgs(name="search", namespace=ns, labels=search_labels),
+    spec=k8s.apps.v1.DeploymentSpecArgs(
+        replicas=search_replicas,
+        selector=k8s.meta.v1.LabelSelectorArgs(match_labels=search_labels),
+        template=k8s.core.v1.PodTemplateSpecArgs(
+            metadata=k8s.meta.v1.ObjectMetaArgs(labels=search_labels),
+            spec=k8s.core.v1.PodSpecArgs(
+                service_account_name=search_sa.metadata.name,
+                security_context=pod_security,
+                containers=[
+                    k8s.core.v1.ContainerArgs(
+                        name="search",
+                        image=search_image,
+                        ports=[k8s.core.v1.ContainerPortArgs(name="http", container_port=8000)],
+                        env=[
+                            k8s.core.v1.EnvVarArgs(name="BSKY_LANCE_URI", value=lance_uri),
+                            k8s.core.v1.EnvVarArgs(name="AWS_REGION", value=region),
+                            k8s.core.v1.EnvVarArgs(
+                                name="OPENROUTER_API_KEY",
+                                value_from=k8s.core.v1.EnvVarSourceArgs(
+                                    secret_key_ref=k8s.core.v1.SecretKeySelectorArgs(
+                                        name=search_key.metadata.name, key="OPENROUTER_API_KEY"
+                                    )
+                                ),
+                            ),
+                        ],
+                        # /healthz counts rows, so it answers only once the table is open.
+                        readiness_probe=k8s.core.v1.ProbeArgs(
+                            http_get=k8s.core.v1.HTTPGetActionArgs(path="/healthz", port="http"),
+                            period_seconds=30,
+                            timeout_seconds=10,
+                        ),
+                        resources=k8s.core.v1.ResourceRequirementsArgs(
+                            requests={"cpu": "500m", "memory": search_memory_limit},
+                            limits={"memory": search_memory_limit},
+                        ),
+                        security_context=container_security,
+                    )
+                ],
+            ),
+        ),
+    ),
+    opts=opts,
+)
+
+# ClusterIP only, like reports-web: `kubectl -n bsky port-forward svc/search 8000:80`.
+search_service = k8s.core.v1.Service(
+    "search",
+    metadata=k8s.meta.v1.ObjectMetaArgs(name="search", namespace=ns, labels=search_labels),
+    spec=k8s.core.v1.ServiceSpecArgs(
+        type="ClusterIP",
+        selector=search_labels,
+        ports=[k8s.core.v1.ServicePortArgs(name="http", port=80, target_port="http")],
+    ),
+    opts=opts,
+)
+
+# --- Event exporter: the bsky namespace's Kubernetes events, as log lines ---
+# Events expire from the cluster after about an hour, and Container Insights
+# can't see a Job's failed pod (it reports running pods only). The exporter
+# writes each event in bsky as one JSON line on stdout, which Fluent Bit ships
+# with the other bsky logs; the data stack alarms on Job failures from them.
+# Scoped to bsky with no object lookups, so it reads events and nothing else.
+
+event_exporter_labels = {"app.kubernetes.io/name": "event-exporter", "app.kubernetes.io/part-of": "bsky-data-lake"}
+event_exporter_image = config.get("eventExporterImage") or "ghcr.io/resmoio/kubernetes-event-exporter:v1.7"
+event_exporter_conf = """logLevel: warn
+logFormat: json
+namespace: bsky
+omitLookup: true
+maxEventAgeSeconds: 60
+route:
+  routes:
+    - match:
+        - receiver: stdout
+receivers:
+  - name: stdout
+    stdout: {}
+"""
+
+event_exporter_sa = k8s.core.v1.ServiceAccount(
+    "event-exporter", metadata=k8s.meta.v1.ObjectMetaArgs(name="event-exporter", namespace=ns), opts=opts
+)
+event_exporter_role = k8s.rbac.v1.Role(
+    "event-exporter",
+    metadata=k8s.meta.v1.ObjectMetaArgs(name="event-exporter", namespace=ns),
+    rules=[k8s.rbac.v1.PolicyRuleArgs(api_groups=[""], resources=["events"], verbs=["get", "list", "watch"])],
+    opts=opts,
+)
+k8s.rbac.v1.RoleBinding(
+    "event-exporter",
+    metadata=k8s.meta.v1.ObjectMetaArgs(name="event-exporter", namespace=ns),
+    role_ref=k8s.rbac.v1.RoleRefArgs(api_group="rbac.authorization.k8s.io", kind="Role", name=event_exporter_role.metadata.name),
+    subjects=[k8s.rbac.v1.SubjectArgs(kind="ServiceAccount", name=event_exporter_sa.metadata.name, namespace=ns)],
+    opts=opts,
+)
+event_exporter_config = k8s.core.v1.ConfigMap(
+    "event-exporter",
+    metadata=k8s.meta.v1.ObjectMetaArgs(name="event-exporter", namespace=ns, labels=event_exporter_labels),
+    data={"config.yaml": event_exporter_conf},
+    opts=opts,
+)
+event_exporter = k8s.apps.v1.Deployment(
+    "event-exporter",
+    metadata=k8s.meta.v1.ObjectMetaArgs(name="event-exporter", namespace=ns, labels=event_exporter_labels),
+    spec=k8s.apps.v1.DeploymentSpecArgs(
+        replicas=1,
+        selector=k8s.meta.v1.LabelSelectorArgs(match_labels=event_exporter_labels),
+        template=k8s.core.v1.PodTemplateSpecArgs(
+            metadata=k8s.meta.v1.ObjectMetaArgs(
+                labels=event_exporter_labels,
+                annotations={"bsky/config-sha256": hashlib.sha256(event_exporter_conf.encode()).hexdigest()},
+            ),
+            spec=k8s.core.v1.PodSpecArgs(
+                service_account_name=event_exporter_sa.metadata.name,
+                security_context=pod_security,
+                containers=[
+                    k8s.core.v1.ContainerArgs(
+                        name="event-exporter",
+                        image=event_exporter_image,
+                        args=["-conf=/data/config.yaml"],
+                        resources=k8s.core.v1.ResourceRequirementsArgs(
+                            requests={"cpu": "10m", "memory": "32Mi"}, limits={"memory": "128Mi"}
+                        ),
+                        volume_mounts=[k8s.core.v1.VolumeMountArgs(name="config", mount_path="/data", read_only=True)],
+                        security_context=container_security,
+                    )
+                ],
+                volumes=[
+                    k8s.core.v1.VolumeArgs(
+                        name="config",
+                        config_map=k8s.core.v1.ConfigMapVolumeSourceArgs(name=event_exporter_config.metadata.name),
+                    )
+                ],
+            ),
+        ),
+    ),
+    opts=opts,
+)
+
 # --- Reports: hourly static-site build, served by nginx (see reports/CLAUDE.md) ---
 
 reports_labels = {"app.kubernetes.io/name": "reports", "app.kubernetes.io/part-of": "bsky-data-lake"}

@@ -316,7 +316,8 @@ def test_pipeline_alarms_notify_the_alert_topic():
     def check(topic_arn):
         alarms = {a["name"]: a for a in mocks.by_type["aws:cloudwatch/metricAlarm:MetricAlarm"]}
         assert sorted(alarms) == [
-            "bsky-dead-letters", "bsky-embed-stalled", "bsky-ingest-stalled", "bsky-loader-behind", "bsky-silver-stalled",
+            "bsky-dead-letters", "bsky-embed-stalled", "bsky-index-stalled", "bsky-ingest-stalled", "bsky-job-failed",
+            "bsky-loader-behind", "bsky-pod-crash-looping", "bsky-pod-memory-high", "bsky-pod-oom-killed", "bsky-silver-stalled",
         ]
         for a in alarms.values():
             assert a["alarmActions"] == [topic_arn] and a["okActions"] == [topic_arn]
@@ -327,7 +328,8 @@ def test_pipeline_alarms_notify_the_alert_topic():
         assert alarms["bsky-dead-letters"]["dimensions"] == {"QueueName": "bsky-raw-files-dlq"}
         assert alarms["bsky-loader-behind"]["threshold"] == 900
         filters = {f["name"]: f for f in mocks.by_type["aws:cloudwatch/logMetricFilter:LogMetricFilter"]}
-        for alarm, metric_filter in [("bsky-silver-stalled", "bsky-silver-windows"), ("bsky-embed-stalled", "bsky-embed-chunks")]:
+        for alarm, metric_filter in [("bsky-silver-stalled", "bsky-silver-windows"), ("bsky-embed-stalled", "bsky-embed-chunks"),
+                                    ("bsky-index-stalled", "bsky-index-runs")]:
             a, f = alarms[alarm], filters[metric_filter]
             transformation = f["metricTransformation"]
             assert (a["namespace"], a["metricName"]) == (transformation["namespace"], transformation["name"])
@@ -335,6 +337,7 @@ def test_pipeline_alarms_notify_the_alert_topic():
             assert (a["period"], a["evaluationPeriods"], a["treatMissingData"]) == (3600, 2, "breaching")
         # Silent until its CronJob runs in the cluster (embedAlarmActions).
         assert alarms["bsky-embed-stalled"]["actionsEnabled"] is False
+        assert alarms["bsky-index-stalled"]["actionsEnabled"] is False
         (sub,) = mocks.by_type["aws:sns/topicSubscription:TopicSubscription"]
         assert (sub["protocol"], sub["endpoint"]) == ("email", "alerts@example.com")
 
@@ -346,6 +349,35 @@ def test_monthly_budget_alerts():
     assert (budget["limitAmount"], budget["timeUnit"]) == ("250", "MONTHLY")
     kinds = sorted((n["notificationType"], n["threshold"]) for n in budget["notifications"])
     assert kinds == [("ACTUAL", 50), ("ACTUAL", 80), ("ACTUAL", 100), ("FORECASTED", 100)]
+
+
+@pulumi.runtime.test
+def test_index_reads_silver_and_writes_only_lance():
+    def check(args):
+        policy, arn = args
+        stmts = {s["Sid"]: s for s in json.loads(policy)["Statement"]}
+        silver = "arn:aws:s3:::test-warehouse/iceberg/bsky_silver"
+        assert stmts["ReadSilver"]["Action"] == "s3:GetObject"
+        assert f"{silver}/post_embeddings/*" in stmts["ReadSilver"]["Resource"]
+        assert stmts["WriteIndex"]["Resource"] == "arn:aws:s3:::test-warehouse/lance/*"
+        # No Glue writes and no Iceberg writes.
+        assert "glue:CreateTable" not in policy and "glue:UpdateTable" not in policy
+        assert "bsky_raw" not in policy and "test-bucket" not in policy
+        assert arn == "arn:aws:iam::123456789012:role/bsky/bsky-index"
+
+    return pulumi.Output.all(infra.index_policy_document, infra.index_role.arn).apply(check)
+
+
+@pulumi.runtime.test
+def test_search_only_reads_lance():
+    def check(arn):
+        stmts = json.loads(infra.search_policy_document)["Statement"]
+        actions = {a for s in stmts for a in ([s["Action"]] if isinstance(s["Action"], str) else s["Action"])}
+        assert actions == {"s3:ListBucket", "s3:GetObject"}
+        assert {s["Resource"] for s in stmts} == {"arn:aws:s3:::test-warehouse", "arn:aws:s3:::test-warehouse/lance/*"}
+        assert arn == "arn:aws:iam::123456789012:role/bsky/bsky-search"
+
+    return infra.search_role.arn.apply(check)
 
 
 @pulumi.runtime.test
@@ -444,3 +476,45 @@ def test_existing_buckets_are_adopted_for_tags_and_never_deleted():
             assert set(buckets[name]) - {"tagsAll", "arn", "id", "urn"} == {"bucket", "bucketNamespace", "tags"}, buckets[name]
 
     return pulumi.Output.all(*[b.urn for b in infra.existing_buckets.values()]).apply(check)
+
+
+def test_container_insights_alarms_query_the_workload_namespace():
+    alarms = {a["name"]: a for a in mocks.by_type["aws:cloudwatch/metricAlarm:MetricAlarm"]}
+    for name, metric in [("bsky-pod-memory-high", "pod_memory_utilization_over_pod_limit"),
+                         ("bsky-pod-oom-killed", "pod_container_status_terminated_reason_oom_killed"),
+                         ("bsky-pod-crash-looping", "pod_container_status_waiting_reason_crash_loop_back_off")]:
+        a = alarms[name]
+        (q,) = a["metricQueries"]
+        assert f"MAX({metric})" in q["expression"] and "Namespace = 'bsky'" in q["expression"]
+        assert "ClusterName = 'bsky'" in q["expression"] and q["returnData"] is True
+        # The agent's per-pod dimension set: a SCHEMA with any other set matches nothing.
+        assert "SCHEMA(ContainerInsights, ClusterName, Namespace, PodName)" in q["expression"]
+        # Missing data is a quiet namespace or no incident, not a failure.
+        assert a["treatMissingData"] == "notBreaching"
+    assert alarms["bsky-pod-memory-high"]["threshold"] == 90
+    # One 5-minute max, since the agent skips minutes.
+    for name in ["bsky-pod-memory-high", "bsky-pod-crash-looping"]:
+        (q,) = alarms[name]["metricQueries"]
+        assert (q["period"], alarms[name]["evaluationPeriods"]) == (300, 1)
+    groups = {g["name"]: g for g in mocks.by_type["aws:cloudwatch/logGroup:LogGroup"]}
+    assert groups["/aws/containerinsights/bsky/performance"]["retentionInDays"] == 14
+
+
+@pulumi.runtime.test
+def test_cloudwatch_agent_role_uses_the_managed_agent_policy():
+    def check(arn):
+        assert arn == "arn:aws:iam::123456789012:role/bsky/bsky-cloudwatch-agent"
+        policies = {a["policyArn"] for a in mocks.by_type["aws:iam/rolePolicyAttachment:RolePolicyAttachment"]}
+        assert "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy" in policies
+
+    return infra.cloudwatch_agent_role.arn.apply(check)
+
+
+def test_job_failed_alarm_counts_failed_job_events():
+    alarms = {a["name"]: a for a in mocks.by_type["aws:cloudwatch/metricAlarm:MetricAlarm"]}
+    filters = {f["name"]: f for f in mocks.by_type["aws:cloudwatch/logMetricFilter:LogMetricFilter"]}
+    a, f = alarms["bsky-job-failed"], filters["bsky-job-failures"]
+    assert (a["metricName"], a["namespace"]) == (f["metricTransformation"]["name"], f["metricTransformation"]["namespace"])
+    assert '$.involvedObject.kind = "Job"' in f["pattern"]
+    assert "BackoffLimitExceeded" in f["pattern"] and "DeadlineExceeded" in f["pattern"]
+    assert a["treatMissingData"] == "notBreaching" and a["threshold"] == 1

@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-QWEN_QUERY = "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
+from bsky_embed import spec
+
+QWEN_QUERY = spec.QUERY_PROMPT  # the same instruction E2/E3 use
 
 
 @dataclass(frozen=True)

@@ -1,0 +1,38 @@
+[project]
+name = "bsky-search"
+version = "0.1.0"
+description = "The search index over post embeddings and its query API (E3)"
+authors = [
+    { name = "Gordon Weakliem", email = "gordon.weakliem@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "bsky-embed",
+    "bsky-enrich",
+    "fastapi>=0.121.0",
+    "lancedb>=0.41.0",
+    "numpy>=2.5.4",
+    "pyarrow>=22.0.0",
+    "pyiceberg[glue,pyarrow]>=0.12.0",
+    "python-dotenv>=1.2.4",
+    "uvicorn>=0.38.0",
+]
+
+[project.scripts]
+bsky-index = "bsky_search.index:main"
+bsky-search = "bsky_search.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pyiceberg[sql-sqlite]>=0.12.0",
+    "pytest>=9.2.0",
+]
+
+[tool.uv.sources]
+bsky-embed = { path = "../embed", editable = true }
+bsky-enrich = { path = "../enrich", editable = true }

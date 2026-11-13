@@ -22,13 +22,15 @@ import numpy as np
 
 from bsky_enrich.spec import eligible  # same length rule as classification
 
-__all__ = ["DIMS", "DOC_PROMPT", "DTYPE", "MODEL", "SPEC_VERSION", "decode_vector", "eligible", "encode_vectors", "text"]
+__all__ = ["DIMS", "DOC_PROMPT", "DTYPE", "MODEL", "QUERY_PROMPT", "SPEC_VERSION", "decode_vector", "eligible", "encode_vectors", "text"]
 
 SPEC_VERSION = "v1"
 MODEL = "qwen/qwen3-embedding-8b"  # paid variant: never a :free id (20/min, 1,000/day caps)
 DIMS = 1024
 PROVIDER = "nebius"  # OpenRouter slug (responses name it "Nebius"); bf16, $0.01/M tokens; no fallback to another provider
 DOC_PROMPT = ""  # Qwen3-Embedding puts its instruction on queries only
+# Search queries (E3) carry the model card's instruction, as E1 scored them.
+QUERY_PROMPT = "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
 DTYPE = np.dtype("<f2")
 
 

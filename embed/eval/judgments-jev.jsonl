@@ -2606,3 +2606,284 @@
 {"qid": "q05", "query": "war in Ukraine", "uri": "at://did:plc:n6ybmngmohwivlhrvtcnixow/app.bsky.feed.post/3mzubcclcps22", "p": 0.98, "model": "jev-1.14.0"}
 {"qid": "q04", "query": "ICE immigration arrests and raids", "uri": "at://did:plc:4cujbu5jdenzb2f34yghs2ia/app.bsky.feed.post/3mztpybsvs224", "p": 0.97, "model": "jev-1.14.0"}
 {"qid": "q46", "query": "Japanese Prime Minister Takaichi", "uri": "at://did:plc:f7x6zup4bpeseif4ctvflmef/app.bsky.feed.post/3mzvao4s4a22j", "p": 0.03, "model": "jev-1.14.0"}
+{"qid": "q01", "query": "calls to impeach Pete Hegseth", "uri": "at://did:plc:aj3cdjcejjrldwr7qdidj2z6/app.bsky.feed.post/3mzuzr4w3nc2e", "p": 0.97, "model": "jev-1.14.0"}
+{"qid": "q01", "query": "calls to impeach Pete Hegseth", "uri": "at://did:plc:qk6mpn3aqs5nl3lmhgzlpbln/app.bsky.feed.post/3mztxufygf226", "p": 0.98, "model": "jev-1.14.0"}
+{"qid": "q01", "query": "calls to impeach Pete Hegseth", "uri": "at://did:plc:xnxowt4xpjv7vkaoyqpu2ils/app.bsky.feed.post/3mzvxqie2n32a", "p": 0.98, "model": "jev-1.14.0"}
+{"qid": "q01", "query": "calls to impeach Pete Hegseth", "uri": "at://did:plc:4m2mvqumu72dar3pcm2tpebi/app.bsky.feed.post/3mzvpcg4ha523", "p": 0.97, "model": "jev-1.14.0"}
+{"qid": "q01", "query": "calls to impeach Pete Hegseth", "uri": "at://did:plc:443arya3g7jvqz5jyr75555x/app.bsky.feed.post/3mzvvff5jgs25", "p": 0.98, "model": "jev-1.14.0"}
+{"qid": "q01", "query": "calls to impeach Pete Hegseth", "uri": "at://did:plc:oetunpozp6fjudghkpo7u3xa/app.bsky.feed.post/3mzvlhpvtiv2p", "p": 0.91, "model": "jev-1.14.0"}
+{"qid": "q02", "query": "Democrats want Schumer and Jeffries to step down as leaders", "uri": "at://did:plc:ab4v3a44t74qg6xddvbaa7ts/app.bsky.feed.post/3mzvi6b2ujc2z", "p": 0.75, "model": "jev-1.14.0"}
+{"qid": "q01", "query": "calls to impeach Pete Hegseth", "uri": "at://did:plc:zee4rgo3t3vhvdenlv5h6erj/app.bsky.feed.post/3mzvowuivic2o", "p": 0.98, "model": "jev-1.14.0"}
+{"qid": "q03", "query": "2026 midterm election results", "uri": "at://did:plc:mjwatbcziskf47sa54xyo7oj/app.bsky.feed.post/3mztmmt7aap2y", "p": 0.77, "model": "jev-1.14.0"}
+{"qid": "q02", "query": "Democrats want Schumer and Jeffries to step down as leaders", "uri": "at://did:plc:atwzercc3uduwmvwgowbkfwn/app.bsky.feed.post/3mzvad64hhc2n", "p": 0.66, "model": "jev-1.14.0"}
+{"qid": "q03", "query": "2026 midterm election results", "uri": "at://did:plc:4z3yzw36v7ywbf5cqh54nmxz/app.bsky.feed.post/3mzvwkstq3p2r", "p": 0.61, "model": "jev-1.14.0"}
+{"qid": "q04", "query": "ICE immigration arrests and raids", "uri": "at://did:plc:5p6tp72yy3x6jk4yjodfgqbd/app.bsky.feed.post/3mzvnlfycuc2l", "p": 0.9, "model": "jev-1.14.0"}
+{"qid": "q02", "query": "Democrats want Schumer and Jeffries to step down as leaders", "uri": "at://did:plc:vtb2ys2lwpzh3ly5yz6rloyv/app.bsky.feed.post/3mzvjj7ublc23", "p": 0.74, "model": "jev-1.14.0"}
+{"qid": "q02", "query": "Democrats want Schumer and Jeffries to step down as leaders", "uri": "at://did:plc:od736zk4jzdweguvsg2mcwxw/app.bsky.feed.post/3mzvuptiu762q", "p": 0.92, "model": "jev-1.14.0"}
+{"qid": "q03", "query": "2026 midterm election results", "uri": "at://did:plc:naj7eaobpqf5err5j6g6kfin/app.bsky.feed.post/3mzvefst4es2n", "p": 0.88, "model": "jev-1.14.0"}
+{"qid": "q03", "query": "2026 midterm election results", "uri": "at://did:plc:xin7k46us72gvn7sptvjhjgm/app.bsky.feed.post/3mzuiommh522a", "p": 0.95, "model": "jev-1.14.0"}
+{"qid": "q04", "query": "ICE immigration arrests and raids", "uri": "at://did:plc:hgm77onxhalnycegsi6owamh/app.bsky.feed.post/3mzve6hbjas2t", "p": 0.95, "model": "jev-1.14.0"}
+{"qid": "q05", "query": "war in Ukraine", "uri": "at://did:plc:25dugsvmu34db2fddnm53kmc/app.bsky.feed.post/3mzvax7bmbs24", "p": 0.98, "model": "jev-1.14.0"}
+{"qid": "q06", "query": "Gaza", "uri": "at://did:plc:33aldmu3ys6n6p3cchliguz4/app.bsky.feed.post/3mh6x3tn2kc2n", "p": 0.94, "model": "jev-1.14.0"}
+{"qid": "q06", "query": "Gaza", "uri": "at://did:plc:bmhvd7sxpqaf3iuh7rzrduvy/app.bsky.feed.post/3mvxfx4p5s72x", "p": 0.97, "model": "jev-1.14.0"}
+{"qid": "q05", "query": "war in Ukraine", "uri": "at://did:plc:vzmnljt7otfbbgrmachtefxh/app.bsky.feed.post/3mzttu32occ2e", "p": 0.99, "model": "jev-1.14.0"}
+{"qid": "q06", "query": "Gaza", "uri": "at://did:plc:ds3gm23ybne2ikerwax7ovxd/app.bsky.feed.post/3mzul6efaqs2w", "p": 0.97, "model": "jev-1.14.0"}
+{"qid": "q05", "query": "war in Ukraine", "uri": "at://did:plc:tj27oiveb7gnyzk7feome6ju/app.bsky.feed.post/3mzvhgcjxpk2r", "p": 0.99, "model": "jev-1.14.0"}
+{"qid": "q05", "query": "war in Ukraine", "uri": "at://did:plc:inaabcbttmdqgijd6euxr7ft/app.bsky.feed.post/3mzuvc5jnfk2y", "p": 0.98, "model": "jev-1.14.0"}
+{"qid": "q06", "query": "Gaza", "uri": "at://did:plc:p7lgpqr5kl722xjzurdmx5xw/app.bsky.feed.post/3mzvvv363ts2f", "p": 0.98, "model": "jev-1.14.0"}
+{"qid": "q08", "query": "tariffs raising prices", "uri": "at://did:plc:fi3e7p2o6wokiux2dhwo5kl2/app.bsky.feed.post/3mzudubmnuc2m", "p": 0.4, "model": "jev-1.14.0"}
+{"qid": "q06", "query": "Gaza", "uri": "at://did:plc:ywls5myycler36kqt23yaiqc/app.bsky.feed.post/3mzux7pkpu22a", "p": 0.99, "model": "jev-1.14.0"}
+{"qid": "q08", "query": "tariffs raising prices", "uri": "at://did:plc:gs2k5sm6wdqo4butxfkannc2/app.bsky.feed.post/3mztq5otfr226", "p": 0.54, "model": "jev-1.14.0"}
+{"qid": "q08", "query": "tariffs raising prices", "uri": "at://did:plc:ywls5myycler36kqt23yaiqc/app.bsky.feed.post/3mzvtvvscyc26", "p": 0.01, "model": "jev-1.14.0"}
+{"qid": "q06", "query": "Gaza", "uri": "at://did:plc:piqq5ivw4hqosteqgaw5vqga/app.bsky.feed.post/3mzukoyr22x26", "p": 0.96, "model": "jev-1.14.0"}
+{"qid": "q08", "query": "tariffs raising prices", "uri": "at://did:plc:did5psctmmw4j4xlxu64uvzq/app.bsky.feed.post/3mzurmwaiyk2p", "p": 0.64, "model": "jev-1.14.0"}
+{"qid": "q09", "query": "AI taking people's jobs", "uri": "at://did:plc:4vsww6rhxujyrsd3h7z24xj7/app.bsky.feed.post/3mzv5gvvcen2r", "p": 0.11, "model": "jev-1.14.0"}
+{"qid": "q09", "query": "AI taking people's jobs", "uri": "at://did:plc:4vsww6rhxujyrsd3h7z24xj7/app.bsky.feed.post/3mzvgmu6fls2e", "p": 0.1, "model": "jev-1.14.0"}
+{"qid": "q09", "query": "AI taking people's jobs", "uri": "at://did:plc:6ai4ph3yyrkyrdfqfygx7soj/app.bsky.feed.post/3mzvswkd7hf2f", "p": 0.28, "model": "jev-1.14.0"}
+{"qid": "q09", "query": "AI taking people's jobs", "uri": "at://did:plc:ju5bw6oir4uolg6bebaqwq3y/app.bsky.feed.post/3mzum2eyope2x", "p": 0.06, "model": "jev-1.14.0"}
+{"qid": "q09", "query": "AI taking people's jobs", "uri": "at://did:plc:v4wiftvi2jkmw65rjsu3oiww/app.bsky.feed.post/3mzue64dra222", "p": 0.77, "model": "jev-1.14.0"}
+{"qid": "q09", "query": "AI taking people's jobs", "uri": "at://did:plc:xa5or6ldyr5hqypjbvabfq57/app.bsky.feed.post/3mzvsk5u7wc2t", "p": 0.28, "model": "jev-1.14.0"}
+{"qid": "q09", "query": "AI taking people's jobs", "uri": "at://did:plc:sdedequa6geewbatdnlqucan/app.bsky.feed.post/3mzvbjrfi622l", "p": 0.73, "model": "jev-1.14.0"}
+{"qid": "q09", "query": "AI taking people's jobs", "uri": "at://did:plc:owasym32475ohumf7bwkxn54/app.bsky.feed.post/3mzvmo7g3tk23", "p": 0.81, "model": "jev-1.14.0"}
+{"qid": "q10", "query": "climate change", "uri": "at://did:plc:6lpnsyh6oj36kvm6jkidgdrr/app.bsky.feed.post/3mzvkele5fc2j", "p": 0.97, "model": "jev-1.14.0"}
+{"qid": "q10", "query": "climate change", "uri": "at://did:plc:cpmlgv3zvhdo6iqfeccgrzwk/app.bsky.feed.post/3mzvvvgfqn22i", "p": 0.98, "model": "jev-1.14.0"}
+{"qid": "q10", "query": "climate change", "uri": "at://did:plc:hjw5aj2dkamnvdhuyqacdxbq/app.bsky.feed.post/57zo7eq3w23go", "p": 0.91, "model": "jev-1.14.0"}
+{"qid": "q10", "query": "climate change", "uri": "at://did:plc:jaghk4rwlrciav5aieckiiit/app.bsky.feed.post/3mzup4shhjc26", "p": 0.99, "model": "jev-1.14.0"}
+{"qid": "q10", "query": "climate change", "uri": "at://did:plc:nygqyxsnkoenezgeofqmqhve/app.bsky.feed.post/3mzuszmk3x225", "p": 0.98, "model": "jev-1.14.0"}
+{"qid": "q10", "query": "climate change", "uri": "at://did:plc:oouj5xse6knq6qtggefzj6b5/app.bsky.feed.post/3mzutssvxlc2u", "p": 0.99, "model": "jev-1.14.0"}
+{"qid": "q10", "query": "climate change", "uri": "at://did:plc:rddeinqb45gzem3n3zyma7im/app.bsky.feed.post/3mzuw3ht7o22r", "p": 0.99, "model": "jev-1.14.0"}
+{"qid": "q10", "query": "climate change", "uri": "at://did:plc:rmw6tvyllfsh6becwdsi7vmu/app.bsky.feed.post/3mzvg64zco22k", "p": 0.98, "model": "jev-1.14.0"}
+{"qid": "q11", "query": "Supreme Court", "uri": "at://did:plc:6bcnbbkdj5btlwvldfvmkxus/app.bsky.feed.post/3mzvixw3baf2i", "p": 0.78, "model": "jev-1.14.0"}
+{"qid": "q12", "query": "tech company layoffs", "uri": "at://did:plc:pxwnibflohvprne5qrjthokl/app.bsky.feed.post/3mzugzlrkul2i", "p": 0.03, "model": "jev-1.14.0"}
+{"qid": "q12", "query": "tech company layoffs", "uri": "at://did:plc:zjxvf45d2a6pwnygvyf3sxzf/app.bsky.feed.post/3mzvzdtmbmc2n", "p": 0.04, "model": "jev-1.14.0"}
+{"qid": "q12", "query": "tech company layoffs", "uri": "at://did:plc:pv7fudnt4dspurzdnyq73pfe/app.bsky.feed.post/3mzvwh3oqwr26", "p": 0.03, "model": "jev-1.14.0"}
+{"qid": "q12", "query": "tech company layoffs", "uri": "at://did:plc:7dyrrsmh2tdg6p2u4tq2jepa/app.bsky.feed.post/3mzvrsjpsrc2r", "p": 0.03, "model": "jev-1.14.0"}
+{"qid": "q13", "query": "photos of my cat", "uri": "at://did:plc:755oqs2cmfef7dsnng6bhkxn/app.bsky.feed.post/3mzuj2t4ebk2l", "p": 0.12, "model": "jev-1.14.0"}
+{"qid": "q13", "query": "photos of my cat", "uri": "at://did:plc:bijdurhr5utomujxrxrdszot/app.bsky.feed.post/3mzuvrz3d2y2w", "p": 0.6, "model": "jev-1.14.0"}
+{"qid": "q12", "query": "tech company layoffs", "uri": "at://did:plc:zlxwgkchnvfhh6vxz6tphwby/app.bsky.feed.post/3mzvoruu47p2t", "p": 0.03, "model": "jev-1.14.0"}
+{"qid": "q13", "query": "photos of my cat", "uri": "at://did:plc:mtggnee4jne4mdudkldju6wr/app.bsky.feed.post/3mzuf5hxp6s2z", "p": 0.01, "model": "jev-1.14.0"}
+{"qid": "q13", "query": "photos of my cat", "uri": "at://did:plc:nvhcqkv6rzmbpiksl6bxums4/app.bsky.feed.post/3mzu442zxrs2c", "p": 0.72, "model": "jev-1.14.0"}
+{"qid": "q14", "query": "cute dogs", "uri": "at://did:plc:f5uk2w6myk6j7tq7m77afsht/app.bsky.feed.post/3mzw33m6ss22z", "p": 0.94, "model": "jev-1.14.0"}
+{"qid": "q13", "query": "photos of my cat", "uri": "at://did:plc:ooel73huebb2bykfafawpyeo/app.bsky.feed.post/3mzupv6cssk2h", "p": 0.02, "model": "jev-1.14.0"}
+{"qid": "q13", "query": "photos of my cat", "uri": "at://did:plc:vcpqgt4bfahgxralkpjzpwqx/app.bsky.feed.post/3mztxz4ngts2h", "p": 0.48, "model": "jev-1.14.0"}
+{"qid": "q13", "query": "photos of my cat", "uri": "at://did:plc:z6r2zh33lsfnj462krfxl6sx/app.bsky.feed.post/3mzvuwmnmjk2j", "p": 0.03, "model": "jev-1.14.0"}
+{"qid": "q14", "query": "cute dogs", "uri": "at://did:plc:rupxwd5nmhikgmkdci5ogpo2/app.bsky.feed.post/3mztvovxyqc26", "p": 0.04, "model": "jev-1.14.0"}
+{"qid": "q14", "query": "cute dogs", "uri": "at://did:plc:gare2skvu43wg3vuqfezttlg/app.bsky.feed.post/3mzvpvivci22k", "p": 0.37, "model": "jev-1.14.0"}
+{"qid": "q14", "query": "cute dogs", "uri": "at://did:plc:roed2fqzeppkm5gpzpryhvq5/app.bsky.feed.post/3mzw2mklauk2e", "p": 0.96, "model": "jev-1.14.0"}
+{"qid": "q14", "query": "cute dogs", "uri": "at://did:plc:w7k3ckdmyilcbcx3ytgyqtby/app.bsky.feed.post/3mzvq7zjqas2t", "p": 0.78, "model": "jev-1.14.0"}
+{"qid": "q14", "query": "cute dogs", "uri": "at://did:plc:ynnbfs7lu7jxfusxdltqsp7n/app.bsky.feed.post/3mzv6musw522x", "p": 0.92, "model": "jev-1.14.0"}
+{"qid": "q14", "query": "cute dogs", "uri": "at://did:plc:ymd6q3sozfec4npzzkkbahh4/app.bsky.feed.post/3mzuxb565ys23", "p": 0.36, "model": "jev-1.14.0"}
+{"qid": "q15", "query": "rainy weather today", "uri": "at://did:plc:cimtnpntuzrl5eknqgwqtks5/app.bsky.feed.post/3mzvocdnhik2o", "p": 0.77, "model": "jev-1.14.0"}
+{"qid": "q15", "query": "rainy weather today", "uri": "at://did:plc:ccczgd7rrebp3xongmggk4ul/app.bsky.feed.post/3mzva3f24oc2j", "p": 0.78, "model": "jev-1.14.0"}
+{"qid": "q15", "query": "rainy weather today", "uri": "at://did:plc:rvoqqadsgsyroqwfz6wd32jl/app.bsky.feed.post/3mztmmgokvk2r", "p": 0.87, "model": "jev-1.14.0"}
+{"qid": "q16", "query": "coffee", "uri": "at://did:plc:7i3dktasdtl4rmjhesnio5w4/app.bsky.feed.post/3mzuffgets225", "p": 0.97, "model": "jev-1.14.0"}
+{"qid": "q16", "query": "coffee", "uri": "at://did:plc:cb3tjliml36ky7gbebxrwbfi/app.bsky.feed.post/3mzty3wuxac2j", "p": 0.73, "model": "jev-1.14.0"}
+{"qid": "q17", "query": "knitting and crochet projects", "uri": "at://did:plc:4ptk2jsqz4licpz35gzgqn6g/app.bsky.feed.post/3mzuueozifk2e", "p": 0.02, "model": "jev-1.14.0"}
+{"qid": "q16", "query": "coffee", "uri": "at://did:plc:ut7ejab3yodkr53nsjuhy5ms/app.bsky.feed.post/3mzuoqxfp6c2x", "p": 0.97, "model": "jev-1.14.0"}
+{"qid": "q16", "query": "coffee", "uri": "at://did:plc:liqjjaz2ng2f7vf32i5wx3va/app.bsky.feed.post/3mzvam7fsum2u", "p": 0.86, "model": "jev-1.14.0"}
+{"qid": "q16", "query": "coffee", "uri": "at://did:plc:dxdu4lw2g3thzkikbsabjl2o/app.bsky.feed.post/3mzvzvr7n2mg2", "p": 0.95, "model": "jev-1.14.0"}
+{"qid": "q16", "query": "coffee", "uri": "at://did:plc:f4gopzosou3z3nrbn2upmcg3/app.bsky.feed.post/3mzuw7woxff26", "p": 0.96, "model": "jev-1.14.0"}
+{"qid": "q18", "query": "what I cooked for dinner", "uri": "at://did:plc:5z3ljv6m25n75y5zql5ku4ls/app.bsky.feed.post/3mzvokg6nm22p", "p": 0.97, "model": "jev-1.14.0"}
+{"qid": "q17", "query": "knitting and crochet projects", "uri": "at://did:plc:vfwyztv33akqdipljtcvev3m/app.bsky.feed.post/3mzuhhiwqi52w", "p": 0.02, "model": "jev-1.14.0"}
+{"qid": "q18", "query": "what I cooked for dinner", "uri": "at://did:plc:b5tntoc22tjy7ywq7vjochmv/app.bsky.feed.post/3mzv4p5744c2q", "p": 0.15, "model": "jev-1.14.0"}
+{"qid": "q18", "query": "what I cooked for dinner", "uri": "at://did:plc:fuysuc35obdm4bayiufz7xp2/app.bsky.feed.post/3mzvpm5qs622p", "p": 0.23, "model": "jev-1.14.0"}
+{"qid": "q18", "query": "what I cooked for dinner", "uri": "at://did:plc:axzoxaiebudnwv4w7omx3lrh/app.bsky.feed.post/3mzudw3iphk2p", "p": 0.25, "model": "jev-1.14.0"}
+{"qid": "q18", "query": "what I cooked for dinner", "uri": "at://did:plc:72gtm247vk6wh7zmiw44blhz/app.bsky.feed.post/3mztqrbmgxc2n", "p": 0.71, "model": "jev-1.14.0"}
+{"qid": "q18", "query": "what I cooked for dinner", "uri": "at://did:plc:6khzwdbo3gizpfqqu6qugx63/app.bsky.feed.post/3mzuwz6vc4k2z", "p": 0.75, "model": "jev-1.14.0"}
+{"qid": "q18", "query": "what I cooked for dinner", "uri": "at://did:plc:ga43oe4cmwjrifzeyv5pyfeg/app.bsky.feed.post/3mzubmx76mk2s", "p": 0.88, "model": "jev-1.14.0"}
+{"qid": "q18", "query": "what I cooked for dinner", "uri": "at://did:plc:pxffh4s3spa5h6457x6wkpno/app.bsky.feed.post/3mzvjjkytqc23", "p": 0.46, "model": "jev-1.14.0"}
+{"qid": "q19", "query": "birdwatching", "uri": "at://did:plc:2wtvkd3akfpms6gwdf3to7ls/app.bsky.feed.post/3mzvmvdqrcs2x", "p": 0.96, "model": "jev-1.14.0"}
+{"qid": "q20", "query": "rent is too expensive", "uri": "at://did:plc:2rvurqid7jc5zeqc5l4q4qmb/app.bsky.feed.post/3mzvo3wlnus2j", "p": 0.04, "model": "jev-1.14.0"}
+{"qid": "q19", "query": "birdwatching", "uri": "at://did:plc:32eyaxpuxciuq235r2zhq6ag/app.bsky.feed.post/3mzw27pe7ys2y", "p": 0.98, "model": "jev-1.14.0"}
+{"qid": "q20", "query": "rent is too expensive", "uri": "at://did:plc:4q6ctl7imutpx4wxfzub554r/app.bsky.feed.post/3mzvkq5dzek22", "p": 0.09, "model": "jev-1.14.0"}
+{"qid": "q18", "query": "what I cooked for dinner", "uri": "at://did:plc:ylpbqychb3amm4ajsk3qispe/app.bsky.feed.post/3mzveodwtbk2d", "p": 0.31, "model": "jev-1.14.0"}
+{"qid": "q20", "query": "rent is too expensive", "uri": "at://did:plc:um7usj47qhgdzqxs6zhmnloc/app.bsky.feed.post/3mzunirhqds2k", "p": 0.96, "model": "jev-1.14.0"}
+{"qid": "q20", "query": "rent is too expensive", "uri": "at://did:plc:cukyh664zwfwfsi2qo7otdkl/app.bsky.feed.post/3mzung2mewa2y", "p": 0.72, "model": "jev-1.14.0"}
+{"qid": "q20", "query": "rent is too expensive", "uri": "at://did:plc:wr7vi3n3cjp4cicj7mqqg5yw/app.bsky.feed.post/3mzv75plscc2a", "p": 0.8, "model": "jev-1.14.0"}
+{"qid": "q20", "query": "rent is too expensive", "uri": "at://did:plc:yhivdbs7iysyu2kwq27ky2qs/app.bsky.feed.post/3mzv6wesgks2c", "p": 0.96, "model": "jev-1.14.0"}
+{"qid": "q21", "query": "can't sleep", "uri": "at://did:plc:hlgoxgoln6c3na7cs26mp373/app.bsky.feed.post/3mzvjn5lnms2i", "p": 0.27, "model": "jev-1.14.0"}
+{"qid": "q21", "query": "can't sleep", "uri": "at://did:plc:ljd3bittw6qf2pjcwawvssje/app.bsky.feed.post/3mzurluhi7s2i", "p": 0.97, "model": "jev-1.14.0"}
+{"qid": "q21", "query": "can't sleep", "uri": "at://did:plc:byfkcm6pobdooj766ijj6aej/app.bsky.feed.post/3mzv3amstmk2a", "p": 0.96, "model": "jev-1.14.0"}
+{"qid": "q21", "query": "can't sleep", "uri": "at://did:plc:4xlp7m7ldrgbizizvrt6e2gw/app.bsky.feed.post/3mztqdxy3fc24", "p": 0.43, "model": "jev-1.14.0"}
+{"qid": "q21", "query": "can't sleep", "uri": "at://did:plc:vd2mre3j5zc2qrluofrt522d/app.bsky.feed.post/3mzusykjxn22o", "p": 0.95, "model": "jev-1.14.0"}
+{"qid": "q21", "query": "can't sleep", "uri": "at://did:plc:qskh6nwze4hsygaodrgdxzur/app.bsky.feed.post/3mzulgqkbso24", "p": 0.21, "model": "jev-1.14.0"}
+{"qid": "q21", "query": "can't sleep", "uri": "at://did:plc:vgwja5daf5lwh3shcozhhon4/app.bsky.feed.post/3mztqngljj22j", "p": 0.25, "model": "jev-1.14.0"}
+{"qid": "q21", "query": "can't sleep", "uri": "at://did:plc:xraojoj5btwbdly5qiknkvej/app.bsky.feed.post/3mzuthqvmqk2t", "p": 0.54, "model": "jev-1.14.0"}
+{"qid": "q21", "query": "can't sleep", "uri": "at://did:plc:ztbw4fkkmqumhnu4tdk5tfdp/app.bsky.feed.post/3mzulpgngwc2e", "p": 0.91, "model": "jev-1.14.0"}
+{"qid": "q22", "query": "book recommendations", "uri": "at://did:plc:7py5oycd7tiuukfr4om2xgdr/app.bsky.feed.post/3mzvxndodl22s", "p": 0.95, "model": "jev-1.14.0"}
+{"qid": "q22", "query": "book recommendations", "uri": "at://did:plc:7o4akpi32gcf7j3ar43zqd64/app.bsky.feed.post/3mzvbcbov6k27", "p": 0.93, "model": "jev-1.14.0"}
+{"qid": "q22", "query": "book recommendations", "uri": "at://did:plc:g52hxvjmpw7ywv2ygesrt4a2/app.bsky.feed.post/3mzvjlqdlqc2i", "p": 0.35, "model": "jev-1.14.0"}
+{"qid": "q22", "query": "book recommendations", "uri": "at://did:plc:qu7xxpaty4mnnzzrq4darj67/app.bsky.feed.post/3mzuytkk3qs2z", "p": 0.94, "model": "jev-1.14.0"}
+{"qid": "q23", "query": "gardening", "uri": "at://did:plc:547ap2oipxp2bulk6gpjnstr/app.bsky.feed.post/3mzvit6r6zk2c", "p": 0.86, "model": "jev-1.14.0"}
+{"qid": "q23", "query": "gardening", "uri": "at://did:plc:tyundfshkzgi7c6r4f3rseek/app.bsky.feed.post/3mzuvcj5lqk27", "p": 0.76, "model": "jev-1.14.0"}
+{"qid": "q24", "query": "public transit and commuting", "uri": "at://did:plc:ndjdmq6yfdkm7psa7ncumn5k/app.bsky.feed.post/3mzv6sc4cf4b2", "p": 0.96, "model": "jev-1.14.0"}
+{"qid": "q24", "query": "public transit and commuting", "uri": "at://did:plc:nyykgkrfw23j4ow2lo52eig4/app.bsky.feed.post/3mztpy5obnv2x", "p": 0.96, "model": "jev-1.14.0"}
+{"qid": "q24", "query": "public transit and commuting", "uri": "at://did:plc:u5du6zfs2lechsd327shhya2/app.bsky.feed.post/3mztp6lvfe22h", "p": 0.61, "model": "jev-1.14.0"}
+{"qid": "q24", "query": "public transit and commuting", "uri": "at://did:plc:eu2dmcdlpbokvf5o6pppu2nq/app.bsky.feed.post/3mzuqoxguik2t", "p": 0.93, "model": "jev-1.14.0"}
+{"qid": "q25", "query": "feeling sick with a cold or flu", "uri": "at://did:plc:2ifzw3tx5yjfby5ddsylszce/app.bsky.feed.post/3mzucie2s6y2e", "p": 0.01, "model": "jev-1.14.0"}
+{"qid": "q25", "query": "feeling sick with a cold or flu", "uri": "at://did:plc:flpbvdyi6czrxqit75txzuql/app.bsky.feed.post/3mzuyvqcka22f", "p": 0.9, "model": "jev-1.14.0"}
+{"qid": "q25", "query": "feeling sick with a cold or flu", "uri": "at://did:plc:n2iszvfnqhiey3qheue6iy65/app.bsky.feed.post/3mzvrnxxuoc2f", "p": 0.31, "model": "jev-1.14.0"}
+{"qid": "q25", "query": "feeling sick with a cold or flu", "uri": "at://did:plc:rzwhvn46eb6bsbffv4trsbod/app.bsky.feed.post/3mzu6b3gzws2r", "p": 0.04, "model": "jev-1.14.0"}
+{"qid": "q26", "query": "getting ready for Christmas", "uri": "at://did:plc:ep5vwffzf3rxvrjm25wmo36z/app.bsky.feed.post/3mzv3n5vfzd2a", "p": 0.92, "model": "jev-1.14.0"}
+{"qid": "q26", "query": "getting ready for Christmas", "uri": "at://did:plc:hrv23xdlktf3vwffuapq2kcw/app.bsky.feed.post/3mzuabwm7r22t", "p": 0.04, "model": "jev-1.14.0"}
+{"qid": "q26", "query": "getting ready for Christmas", "uri": "at://did:plc:khyjdo6rbnzrxnutqvt7ezoi/app.bsky.feed.post/3mzuvgr67wc2c", "p": 0.04, "model": "jev-1.14.0"}
+{"qid": "q26", "query": "getting ready for Christmas", "uri": "at://did:plc:lkytebjtxwgyqyce3ktj6yfg/app.bsky.feed.post/3mzvt5bjcs22z", "p": 0.96, "model": "jev-1.14.0"}
+{"qid": "q25", "query": "feeling sick with a cold or flu", "uri": "at://did:plc:knx3aan7hlsqofqhfpqykjpx/app.bsky.feed.post/3mzvo2qkve22a", "p": 0.03, "model": "jev-1.14.0"}
+{"qid": "q26", "query": "getting ready for Christmas", "uri": "at://did:plc:penjoerxbidmpkztc25emeg4/app.bsky.feed.post/3mzve55ajam2h", "p": 0.85, "model": "jev-1.14.0"}
+{"qid": "q26", "query": "getting ready for Christmas", "uri": "at://did:plc:sch3h5at3xybrpwr2mtfeedd/app.bsky.feed.post/3mzvblx5uos2x", "p": 0.58, "model": "jev-1.14.0"}
+{"qid": "q27", "query": "NFL game", "uri": "at://did:plc:7jdpff6pnfapnkvduoo6of6s/app.bsky.feed.post/3mzuwlt26ia2p", "p": 0.76, "model": "jev-1.14.0"}
+{"qid": "q27", "query": "NFL game", "uri": "at://did:plc:uit4go5sub5weq5bluh7yszp/app.bsky.feed.post/3mzvj6ai62k23", "p": 0.05, "model": "jev-1.14.0"}
+{"qid": "q27", "query": "NFL game", "uri": "at://did:plc:vd63l2lek5jteq5jhbuzfc73/app.bsky.feed.post/3mzvn7o67vk2z", "p": 0.84, "model": "jev-1.14.0"}
+{"qid": "q27", "query": "NFL game", "uri": "at://did:plc:cqbbvzcbvbxorq25rpy7ihk3/app.bsky.feed.post/3mzvfmraoez2b", "p": 0.92, "model": "jev-1.14.0"}
+{"qid": "q28", "query": "Formula 1", "uri": "at://did:plc:bme4kznu3zscac6teun3l4ct/app.bsky.feed.post/3mzvdx5davx2f", "p": 0.97, "model": "jev-1.14.0"}
+{"qid": "q27", "query": "NFL game", "uri": "at://did:plc:zjdffglp7dvpyxrt6tcjssb5/app.bsky.feed.post/3mzup2tccf62j", "p": 0.59, "model": "jev-1.14.0"}
+{"qid": "q28", "query": "Formula 1", "uri": "at://did:plc:i6mxzh373nksuy5wbitpyi5r/app.bsky.feed.post/3mzvwmrvzu22l", "p": 0.49, "model": "jev-1.14.0"}
+{"qid": "q28", "query": "Formula 1", "uri": "at://did:plc:d3zbncgxnzyriiyncvlr4b5a/app.bsky.feed.post/3mzu7uamukg2o", "p": 0.97, "model": "jev-1.14.0"}
+{"qid": "q28", "query": "Formula 1", "uri": "at://did:plc:toz4no26o2x4vsbum7cp4bxp/app.bsky.feed.post/3mzussopi4v2b", "p": 0.98, "model": "jev-1.14.0"}
+{"qid": "q30", "query": "video game recommendations", "uri": "at://did:plc:74qgwhxco3qrckzrh6rplozq/app.bsky.feed.post/3mzts766gl22w", "p": 0.59, "model": "jev-1.14.0"}
+{"qid": "q29", "query": "new album release", "uri": "at://did:plc:62iob6u266domvaoevgokuv6/app.bsky.feed.post/3mzuvzjflrw26", "p": 0.97, "model": "jev-1.14.0"}
+{"qid": "q29", "query": "new album release", "uri": "at://did:plc:2chq5mqhnvbhztjfxludqabh/app.bsky.feed.post/3mzvl6duwuk2v", "p": 0.96, "model": "jev-1.14.0"}
+{"qid": "q30", "query": "video game recommendations", "uri": "at://did:plc:d4676ge5yht55lusn5pgr7rk/app.bsky.feed.post/3mzv3n2duuc2s", "p": 0.1, "model": "jev-1.14.0"}
+{"qid": "q30", "query": "video game recommendations", "uri": "at://did:plc:cgiz5ru5qvotan4ro5lvi2t4/app.bsky.feed.post/3mzuxbfybdshv", "p": 0.97, "model": "jev-1.14.0"}
+{"qid": "q30", "query": "video game recommendations", "uri": "at://did:plc:my7jihjvukbvprb4mxhce7ly/app.bsky.feed.post/3mzujcoyxq22h", "p": 0.85, "model": "jev-1.14.0"}
+{"qid": "q30", "query": "video game recommendations", "uri": "at://did:plc:mnykz3tixp5cvaaqqfu4na5l/app.bsky.feed.post/3mzublpucgs26", "p": 0.26, "model": "jev-1.14.0"}
+{"qid": "q31", "query": "Pokemon", "uri": "at://did:plc:izbl7atoqvrqvrwojd3vfn6r/app.bsky.feed.post/3mzvssdjgck27", "p": 0.97, "model": "jev-1.14.0"}
+{"qid": "q31", "query": "Pokemon", "uri": "at://did:plc:5iwuaysoiz44rp5xnwvby6e4/app.bsky.feed.post/3mzuvhmz5os27", "p": 0.93, "model": "jev-1.14.0"}
+{"qid": "q31", "query": "Pokemon", "uri": "at://did:plc:ftrmd6xrnyysgbzdfvmri4fz/app.bsky.feed.post/3mzurgdcupk2i", "p": 0.96, "model": "jev-1.14.0"}
+{"qid": "q32", "query": "anime", "uri": "at://did:plc:l4kmaorvm2bt2huo6hvauu2d/app.bsky.feed.post/3mzucjuy4o22u", "p": 0.94, "model": "jev-1.14.0"}
+{"qid": "q32", "query": "anime", "uri": "at://did:plc:u5aocgxliwwqha4knkeg4lox/app.bsky.feed.post/3mzvkbxvdl22b", "p": 0.97, "model": "jev-1.14.0"}
+{"qid": "q32", "query": "anime", "uri": "at://did:plc:odsm4edkmeyrshycc4b4tryy/app.bsky.feed.post/3mzvs53vjos2g", "p": 0.96, "model": "jev-1.14.0"}
+{"qid": "q31", "query": "Pokemon", "uri": "at://did:plc:zi5aioxynsdueigiqasrxitc/app.bsky.feed.post/3mzv4fubvzk2x", "p": 0.97, "model": "jev-1.14.0"}
+{"qid": "q32", "query": "anime", "uri": "at://did:plc:ctyrrc37zig4nvaw4x7hwk66/app.bsky.feed.post/3mztrrkxbms2h", "p": 0.83, "model": "jev-1.14.0"}
+{"qid": "q33", "query": "horror movies", "uri": "at://did:plc:gzojr37nlyylg7wsg3hxohnq/app.bsky.feed.post/3mzulzhhhmk2x", "p": 0.08, "model": "jev-1.14.0"}
+{"qid": "q33", "query": "horror movies", "uri": "at://did:plc:mcifgsd6po7p5r2i433o4chw/app.bsky.feed.post/3mztoui4nfs2x", "p": 0.71, "model": "jev-1.14.0"}
+{"qid": "q33", "query": "horror movies", "uri": "at://did:plc:n5nxxmkho7kqzzykc2stnsbt/app.bsky.feed.post/3mzvexo3mws2z", "p": 0.97, "model": "jev-1.14.0"}
+{"qid": "q33", "query": "horror movies", "uri": "at://did:plc:q2bguwfbvwbiloie6q2aq3gp/app.bsky.feed.post/3mzv3ujvio22t", "p": 0.98, "model": "jev-1.14.0"}
+{"qid": "q33", "query": "horror movies", "uri": "at://did:plc:qa6khhivtkx32dqvkjea2lhf/app.bsky.feed.post/3mzttlhzdpk2y", "p": 0.69, "model": "jev-1.14.0"}
+{"qid": "q34", "query": "fan art", "uri": "at://did:plc:2wlxdtebgven2gium5sjwf34/app.bsky.feed.post/3mzvigff6tc2b", "p": 0.97, "model": "jev-1.14.0"}
+{"qid": "q34", "query": "fan art", "uri": "at://did:plc:cgqmrmtdhadq6wypv35voe7c/app.bsky.feed.post/3mztz2lb4g22x", "p": 0.97, "model": "jev-1.14.0"}
+{"qid": "q34", "query": "fan art", "uri": "at://did:plc:clfx5vqz5zlsxtnwldcnphw3/app.bsky.feed.post/3mzty324eas2h", "p": 0.94, "model": "jev-1.14.0"}
+{"qid": "q34", "query": "fan art", "uri": "at://did:plc:erh77syxmfheeahnbcvsycyq/app.bsky.feed.post/3mzvd5ccvdc2p", "p": 0.91, "model": "jev-1.14.0"}
+{"qid": "q35", "query": "furniture on sale", "uri": "at://did:plc:3ow7w3towobeavswbxraoxfz/app.bsky.feed.post/3mzvdyxifxr2h", "p": 0.02, "model": "jev-1.14.0"}
+{"qid": "q35", "query": "furniture on sale", "uri": "at://did:plc:3ow7w3towobeavswbxraoxfz/app.bsky.feed.post/3mzvdyxejwu2p", "p": 0.01, "model": "jev-1.14.0"}
+{"qid": "q35", "query": "furniture on sale", "uri": "at://did:plc:56e7yw4nkilbpsc5dzhq4xdf/app.bsky.feed.post/3mzvshxylvb2d", "p": 0.12, "model": "jev-1.14.0"}
+{"qid": "q35", "query": "furniture on sale", "uri": "at://did:plc:dpwpritm3tmba7pyf4r6uqlf/app.bsky.feed.post/3mzvs3funpb2h", "p": 0.12, "model": "jev-1.14.0"}
+{"qid": "q35", "query": "furniture on sale", "uri": "at://did:plc:knlvjk7wpys6b2knzmpwmysz/app.bsky.feed.post/3mzuzjvudpw2c", "p": 0.04, "model": "jev-1.14.0"}
+{"qid": "q35", "query": "furniture on sale", "uri": "at://did:plc:odki6ixfjbzeoednzty72jut/app.bsky.feed.post/3mzv6g3hznk2j", "p": 0.01, "model": "jev-1.14.0"}
+{"qid": "q35", "query": "furniture on sale", "uri": "at://did:plc:uf6jztgw43ymv2r7652qtdhv/app.bsky.feed.post/3mzvqatiajf2f", "p": 0.01, "model": "jev-1.14.0"}
+{"qid": "q35", "query": "furniture on sale", "uri": "at://did:plc:viaqtelv4ymolba4sludlemj/app.bsky.feed.post/3mzu3egpn6c2w", "p": 0.02, "model": "jev-1.14.0"}
+{"qid": "q36", "query": "cryptocurrency investing", "uri": "at://did:plc:a4crqcbggoj6hsplbpqac7pd/app.bsky.feed.post/3mzvkxhih7w2j", "p": 0.75, "model": "jev-1.14.0"}
+{"qid": "q35", "query": "furniture on sale", "uri": "at://did:plc:vn3cftnfmz62gxvlj5zch7wr/app.bsky.feed.post/3mztzd2whw22y", "p": 0.15, "model": "jev-1.14.0"}
+{"qid": "q36", "query": "cryptocurrency investing", "uri": "at://did:plc:q45pv5opjx3f6qi4etq2vaf5/app.bsky.feed.post/3mzuc3t2ssn2q", "p": 0.14, "model": "jev-1.14.0"}
+{"qid": "q36", "query": "cryptocurrency investing", "uri": "at://did:plc:qjecoctqkxktr4adblplcluu/app.bsky.feed.post/3mzuebhcdp322", "p": 0.29, "model": "jev-1.14.0"}
+{"qid": "q36", "query": "cryptocurrency investing", "uri": "at://did:plc:qjecoctqkxktr4adblplcluu/app.bsky.feed.post/3mzvycirefk2m", "p": 0.04, "model": "jev-1.14.0"}
+{"qid": "q37", "query": "\u5730\u9707\u306e\u60c5\u5831", "uri": "at://did:plc:wnt2mlml2bmux7aj6rdfxbov/app.bsky.feed.post/3mzvc3cnrns2z", "p": 0.79, "model": "jev-1.14.0"}
+{"qid": "q37", "query": "\u5730\u9707\u306e\u60c5\u5831", "uri": "at://did:plc:nds5dzdds2lklcncdhiovblu/app.bsky.feed.post/3mzuklse6ac62", "p": 0.88, "model": "jev-1.14.0"}
+{"qid": "q37", "query": "\u5730\u9707\u306e\u60c5\u5831", "uri": "at://did:plc:2glsctd3tl6sj2o2jun4yae2/app.bsky.feed.post/3mzukg6qmtb2i", "p": 0.01, "model": "jev-1.14.0"}
+{"qid": "q38", "query": "\u9ad8\u5e02\u9996\u76f8", "uri": "at://did:plc:7f6lklkxopvnqr67cyvskz6y/app.bsky.feed.post/3mzvxsfnqpk2n", "p": 0.08, "model": "jev-1.14.0"}
+{"qid": "q38", "query": "\u9ad8\u5e02\u9996\u76f8", "uri": "at://did:plc:hfyr46yy7s7xuekuzfrwefhl/app.bsky.feed.post/3mzvzzdodqc2m", "p": 0.31, "model": "jev-1.14.0"}
+{"qid": "q38", "query": "\u9ad8\u5e02\u9996\u76f8", "uri": "at://did:plc:tqcm5zeey6wgrvneafhbtzy3/app.bsky.feed.post/3mzutnxdmws2l", "p": 0.03, "model": "jev-1.14.0"}
+{"qid": "q37", "query": "\u5730\u9707\u306e\u60c5\u5831", "uri": "at://did:plc:wqozlckq75bldkbhbsl6uocx/app.bsky.feed.post/3mzw46jhyok2p", "p": 0.01, "model": "jev-1.14.0"}
+{"qid": "q39", "query": "\u4eca\u65e5\u306e\u6669\u3054\u98ef", "uri": "at://did:plc:j4xbfijqwrhif2pq5okykid5/app.bsky.feed.post/3mzui4ylths2q", "p": 0.25, "model": "jev-1.14.0"}
+{"qid": "q39", "query": "\u4eca\u65e5\u306e\u6669\u3054\u98ef", "uri": "at://did:plc:nseqv5rmlrd7h6rhdkfe355h/app.bsky.feed.post/3mztz3u2wkc2s", "p": 0.06, "model": "jev-1.14.0"}
+{"qid": "q39", "query": "\u4eca\u65e5\u306e\u6669\u3054\u98ef", "uri": "at://did:plc:qgp3yhfzwirw5ij27jeaxkfo/app.bsky.feed.post/3mzva2yuxkc2g", "p": 0.02, "model": "jev-1.14.0"}
+{"qid": "q39", "query": "\u4eca\u65e5\u306e\u6669\u3054\u98ef", "uri": "at://did:plc:egryxg4kkcl7pzfgjhw7qhrw/app.bsky.feed.post/3mzvzbqx7sc2d", "p": 0.23, "model": "jev-1.14.0"}
+{"qid": "q40", "query": "\u732b", "uri": "at://did:plc:2zqpu2y2uokkukwgdcxdmxj6/app.bsky.feed.post/3mzuhgkpzts2c", "p": 0.58, "model": "jev-1.14.0"}
+{"qid": "q40", "query": "\u732b", "uri": "at://did:plc:4svjdm7w27l2pcewynlhb4jh/app.bsky.feed.post/3mzux5edxdn2m", "p": 0.99, "model": "jev-1.14.0"}
+{"qid": "q39", "query": "\u4eca\u65e5\u306e\u6669\u3054\u98ef", "uri": "at://did:plc:zve37afkw2wmv43unga2fo5u/app.bsky.feed.post/3mztuvm3wbssk", "p": 0.11, "model": "jev-1.14.0"}
+{"qid": "q40", "query": "\u732b", "uri": "at://did:plc:6apqsmheky2xlwtpktpqxdtt/app.bsky.feed.post/3mzvzbklbgk2k", "p": 0.99, "model": "jev-1.14.0"}
+{"qid": "q40", "query": "\u732b", "uri": "at://did:plc:ffzlneynuf3wxcpmsp7i5aam/app.bsky.feed.post/3mzu2zo5k7l2q", "p": 0.91, "model": "jev-1.14.0"}
+{"qid": "q40", "query": "\u732b", "uri": "at://did:plc:jn65s7pqww2xtmlq7fy63rvc/app.bsky.feed.post/3mzv4yglhkc2y", "p": 0.98, "model": "jev-1.14.0"}
+{"qid": "q40", "query": "\u732b", "uri": "at://did:plc:fwuelmalesmyxstoau546tvn/app.bsky.feed.post/3mzu76ihmlr2o", "p": 0.97, "model": "jev-1.14.0"}
+{"qid": "q40", "query": "\u732b", "uri": "at://did:plc:lfyel3e4dplz7iyd26u2kdzb/app.bsky.feed.post/3mzv7n55etc2z", "p": 0.24, "model": "jev-1.14.0"}
+{"qid": "q40", "query": "\u732b", "uri": "at://did:plc:ll43v4azokomebzqxv5xw73h/app.bsky.feed.post/3mzudxsluec2o", "p": 0.95, "model": "jev-1.14.0"}
+{"qid": "q40", "query": "\u732b", "uri": "at://did:plc:rwp4t73kjjf2ds6hlwcwkx2a/app.bsky.feed.post/3mzuz6oyrgc2n", "p": 0.67, "model": "jev-1.14.0"}
+{"qid": "q40", "query": "\u732b", "uri": "at://did:plc:qhcs4pnmjxxdgiwd4flihgjh/app.bsky.feed.post/3mztwab3hfk2l", "p": 0.98, "model": "jev-1.14.0"}
+{"qid": "q40", "query": "\u732b", "uri": "at://did:plc:z2jzalj6oxyg4p3ufalcvs3a/app.bsky.feed.post/3mzvecezrmk2l", "p": 0.96, "model": "jev-1.14.0"}
+{"qid": "q41", "query": "pol\u00edtica en Espa\u00f1a", "uri": "at://did:plc:j22lmfbgns43aqcy5rzhavx3/app.bsky.feed.post/3mzupuy44hb2v", "p": 0.98, "model": "jev-1.14.0"}
+{"qid": "q40", "query": "\u732b", "uri": "at://did:plc:uzj67tldgn6dz3bjjy3ruwqi/app.bsky.feed.post/3mzu5wgcfvz2v", "p": 0.34, "model": "jev-1.14.0"}
+{"qid": "q41", "query": "pol\u00edtica en Espa\u00f1a", "uri": "at://did:plc:rbr2kebmauuwqn2wnu7asivs/app.bsky.feed.post/3mzuvp6wegs27", "p": 0.9, "model": "jev-1.14.0"}
+{"qid": "q40", "query": "\u732b", "uri": "at://did:plc:z36hqb7faevv2qcxtho4f2vt/app.bsky.feed.post/3mzvydzsddc2t", "p": 0.94, "model": "jev-1.14.0"}
+{"qid": "q42", "query": "pol\u00edtica no Brasil, Lula e Bolsonaro", "uri": "at://did:plc:22u3xlfdxqxyzva2fsljotcy/app.bsky.feed.post/3mzuvfn2hmf2y", "p": 0.81, "model": "jev-1.14.0"}
+{"qid": "q41", "query": "pol\u00edtica en Espa\u00f1a", "uri": "at://did:plc:xu5fykhwjcsaiwwfufbcs265/app.bsky.feed.post/3mzvmcwdxiz2m", "p": 0.94, "model": "jev-1.14.0"}
+{"qid": "q42", "query": "pol\u00edtica no Brasil, Lula e Bolsonaro", "uri": "at://did:plc:aediray7gfvrrtnmru6qi3pk/app.bsky.feed.post/3mzvd7rqwsuc2", "p": 0.66, "model": "jev-1.14.0"}
+{"qid": "q42", "query": "pol\u00edtica no Brasil, Lula e Bolsonaro", "uri": "at://did:plc:k2ibnwk5gel2he5l5lpm2dzn/app.bsky.feed.post/3mzvobdvtg22n", "p": 0.63, "model": "jev-1.14.0"}
+{"qid": "q42", "query": "pol\u00edtica no Brasil, Lula e Bolsonaro", "uri": "at://did:plc:som6aqkxgpwrc77oxvlc5rnc/app.bsky.feed.post/3mztmrxg2ic2u", "p": 0.95, "model": "jev-1.14.0"}
+{"qid": "q44", "query": "politique fran\u00e7aise", "uri": "at://did:plc:bhmnbm66ctbglhjgu4tkoxex/app.bsky.feed.post/3mzu3sod54l2u", "p": 0.52, "model": "jev-1.14.0"}
+{"qid": "q44", "query": "politique fran\u00e7aise", "uri": "at://did:plc:2tlip5z44omyyuom375kwzpn/app.bsky.feed.post/3mztxur3ios2n", "p": 0.43, "model": "jev-1.14.0"}
+{"qid": "q44", "query": "politique fran\u00e7aise", "uri": "at://did:plc:6upk2zdkaxugugb6d6pucaa5/app.bsky.feed.post/3mzv33hcfc22j", "p": 0.91, "model": "jev-1.14.0"}
+{"qid": "q44", "query": "politique fran\u00e7aise", "uri": "at://did:plc:um7usj47qhgdzqxs6zhmnloc/app.bsky.feed.post/3mzvq3qp5yk2y", "p": 0.59, "model": "jev-1.14.0"}
+{"qid": "q44", "query": "politique fran\u00e7aise", "uri": "at://did:plc:ngzbpthnykmhg6hdvgb2vlbl/app.bsky.feed.post/3mzviruchjs2v", "p": 0.27, "model": "jev-1.14.0"}
+{"qid": "q45", "query": "earthquakes in Japan", "uri": "at://did:plc:emij7suwjtth6fai5lwzdgi2/app.bsky.feed.post/3mzuwp4psuv2w", "p": 0.02, "model": "jev-1.14.0"}
+{"qid": "q45", "query": "earthquakes in Japan", "uri": "at://did:plc:gcraehdnvtgwrkecsxthozrn/app.bsky.feed.post/3mzvxbfovb42b", "p": 0.02, "model": "jev-1.14.0"}
+{"qid": "q45", "query": "earthquakes in Japan", "uri": "at://did:plc:a6r52ta5azdbgndmyhbzsaaw/app.bsky.feed.post/3mztv5ek34pb2", "p": 0.02, "model": "jev-1.14.0"}
+{"qid": "q45", "query": "earthquakes in Japan", "uri": "at://did:plc:q7ltugqtcpeldvid3aya6tya/app.bsky.feed.post/3mzvn55q7v32d", "p": 0.02, "model": "jev-1.14.0"}
+{"qid": "q46", "query": "Japanese Prime Minister Takaichi", "uri": "at://did:plc:4nmwak3dwpoilgwsqlsyohib/app.bsky.feed.post/3mztpono2w32b", "p": 0.03, "model": "jev-1.14.0"}
+{"qid": "q45", "query": "earthquakes in Japan", "uri": "at://did:plc:s3wznhjdjzpej5xs5dfo4t5u/app.bsky.feed.post/3mzuj6cskcc24", "p": 0.03, "model": "jev-1.14.0"}
+{"qid": "q45", "query": "earthquakes in Japan", "uri": "at://did:plc:hjw5aj2dkamnvdhuyqacdxbq/app.bsky.feed.post/57znmnfj323xc", "p": 0.01, "model": "jev-1.14.0"}
+{"qid": "q46", "query": "Japanese Prime Minister Takaichi", "uri": "at://did:plc:ehbphf37wcfu75cmtssajezf/app.bsky.feed.post/3mzvu7sleq22z", "p": 0.01, "model": "jev-1.14.0"}
+{"qid": "q46", "query": "Japanese Prime Minister Takaichi", "uri": "at://did:plc:ln5ysppu5ajp4nm5wixvqztx/app.bsky.feed.post/52f7yxtboa7vk", "p": 0.01, "model": "jev-1.14.0"}
+{"qid": "q46", "query": "Japanese Prime Minister Takaichi", "uri": "at://did:plc:nruz3fcv34q3meiswdvluyoj/app.bsky.feed.post/3mzva7x6n4c2t", "p": 0.01, "model": "jev-1.14.0"}
+{"qid": "q46", "query": "Japanese Prime Minister Takaichi", "uri": "at://did:plc:jn42q2evsp52giycp5fydgnh/app.bsky.feed.post/3mzv7vpi7ok23", "p": 0.02, "model": "jev-1.14.0"}
+{"qid": "q47", "query": "Brazilian politics", "uri": "at://did:plc:fpcqhbawaciujqptif3bzt4q/app.bsky.feed.post/3mzvpo6dhxc2g", "p": 0.97, "model": "jev-1.14.0"}
+{"qid": "q46", "query": "Japanese Prime Minister Takaichi", "uri": "at://did:plc:wmho6q2uiyktkam3jsvrms3s/app.bsky.feed.post/3mzvbp7vus62z", "p": 0.01, "model": "jev-1.14.0"}
+{"qid": "q47", "query": "Brazilian politics", "uri": "at://did:plc:wtx6b6lfacn3i3jtmqbdohuv/app.bsky.feed.post/3mzv4cakxv22s", "p": 0.24, "model": "jev-1.14.0"}
+{"qid": "q47", "query": "Brazilian politics", "uri": "at://did:plc:m5pzq6ncwhkzpswklcnfqgov/app.bsky.feed.post/3mztmoxqdus24", "p": 0.97, "model": "jev-1.14.0"}
+{"qid": "q48", "query": "German politics", "uri": "at://did:plc:dp6ak7oivlh667yce3gp6jzo/app.bsky.feed.post/3mzvly3r37k2y", "p": 0.14, "model": "jev-1.14.0"}
+{"qid": "q48", "query": "German politics", "uri": "at://did:plc:mxwdltg7wvt6z6zctg4zdujm/app.bsky.feed.post/3mzup3gxfmk22", "p": 0.56, "model": "jev-1.14.0"}
+{"qid": "q04", "query": "ICE immigration arrests and raids", "uri": "at://did:plc:uwl6atgpbqehumm7b74nklox/app.bsky.feed.post/3mzvzazdeem27", "p": 0.97, "model": "jev-1.14.0"}
+{"qid": "q04", "query": "ICE immigration arrests and raids", "uri": "at://did:plc:dvmijl3uv2ewute6j6zo7zfn/app.bsky.feed.post/3mzvnd2zowp23", "p": 0.82, "model": "jev-1.14.0"}
+{"qid": "q02", "query": "Democrats want Schumer and Jeffries to step down as leaders", "uri": "at://did:plc:d3gr6puoxwdcbgjjjgoqozew/app.bsky.feed.post/3mzu66rf6y22w", "p": 0.67, "model": "jev-1.14.0"}
+{"qid": "q03", "query": "2026 midterm election results", "uri": "at://did:plc:mysj5srns453lvj62okorr4o/app.bsky.feed.post/3mzvequ2hfs2u", "p": 0.96, "model": "jev-1.14.0"}
+{"qid": "q05", "query": "war in Ukraine", "uri": "at://did:plc:5zww7zorx2ajw7hqrhuix3ba/app.bsky.feed.post/3mztzligjng2t", "p": 0.99, "model": "jev-1.14.0"}
+{"qid": "q01", "query": "calls to impeach Pete Hegseth", "uri": "at://did:plc:yedehv3sznfpb2tp4epmqoh4/app.bsky.feed.post/3mzvomibnc22e", "p": 0.98, "model": "jev-1.14.0"}
+{"qid": "q03", "query": "2026 midterm election results", "uri": "at://did:plc:3x2u5ly3jmzjrir7c7vx2xw2/app.bsky.feed.post/3mzvgnbqo532r", "p": 0.62, "model": "jev-1.14.0"}
+{"qid": "q04", "query": "ICE immigration arrests and raids", "uri": "at://did:plc:krddjq56g2tupaku6yp7jmec/app.bsky.feed.post/3mzvur6pff22n", "p": 0.95, "model": "jev-1.14.0"}
+{"qid": "q10", "query": "climate change", "uri": "at://did:plc:hwqoh4hv2v4vtdvoa26uyhua/app.bsky.feed.post/3mzuo72dorn2a", "p": 0.99, "model": "jev-1.14.0"}
+{"qid": "q06", "query": "Gaza", "uri": "at://did:plc:wwheex52v4apaiw2rzglk74r/app.bsky.feed.post/3mzv6xya2ps2d", "p": 0.98, "model": "jev-1.14.0"}
+{"qid": "q10", "query": "climate change", "uri": "at://did:plc:hjw5aj2dkamnvdhuyqacdxbq/app.bsky.feed.post/57zqm74goylpk", "p": 0.99, "model": "jev-1.14.0"}
+{"qid": "q12", "query": "tech company layoffs", "uri": "at://did:plc:k3i3d2xfibssxz2lbm45x54o/app.bsky.feed.post/3mzv7z4qen22z", "p": 0.03, "model": "jev-1.14.0"}
+{"qid": "q11", "query": "Supreme Court", "uri": "at://did:plc:z7gnm55iyex472s6m3mgwng6/app.bsky.feed.post/3mzvwbmra6c2q", "p": 0.98, "model": "jev-1.14.0"}
+{"qid": "q11", "query": "Supreme Court", "uri": "at://did:plc:z3ltcacv6zoatrju66dc7cio/app.bsky.feed.post/3mzu73cp7fk2k", "p": 0.98, "model": "jev-1.14.0"}
+{"qid": "q12", "query": "tech company layoffs", "uri": "at://did:plc:k3n5amejalosp3ursaq66u6h/app.bsky.feed.post/3mzv6aengwk2v", "p": 0.04, "model": "jev-1.14.0"}
+{"qid": "q12", "query": "tech company layoffs", "uri": "at://did:plc:r4tm4trsybn5s5zwer3sln3w/app.bsky.feed.post/3mztogji5zs2d", "p": 0.03, "model": "jev-1.14.0"}
+{"qid": "q15", "query": "rainy weather today", "uri": "at://did:plc:57ol2ltstu26tq3jhbqmmeam/app.bsky.feed.post/3mztunn44as2x", "p": 0.15, "model": "jev-1.14.0"}
+{"qid": "q13", "query": "photos of my cat", "uri": "at://did:plc:tsucria26yyptgedqk2pnvqo/app.bsky.feed.post/3mztshcpxe22g", "p": 0.83, "model": "jev-1.14.0"}
+{"qid": "q16", "query": "coffee", "uri": "at://did:plc:kdvkohfy7btmsdkg5mwuzjbw/app.bsky.feed.post/3mzw2k3itac2e", "p": 0.96, "model": "jev-1.14.0"}
+{"qid": "q20", "query": "rent is too expensive", "uri": "at://did:plc:loma3br3gn2hkpqy57iw2i6c/app.bsky.feed.post/3mztxcj3j2s2i", "p": 0.93, "model": "jev-1.14.0"}
+{"qid": "q21", "query": "can't sleep", "uri": "at://did:plc:bwhbflzvq2nbuwj3ebvbymzu/app.bsky.feed.post/3mzvadcinrs2z", "p": 0.37, "model": "jev-1.14.0"}
+{"qid": "q18", "query": "what I cooked for dinner", "uri": "at://did:plc:74z36uj47teo6rojhdd2cnnm/app.bsky.feed.post/3mzvgtyfgq22z", "p": 0.36, "model": "jev-1.14.0"}
+{"qid": "q21", "query": "can't sleep", "uri": "at://did:plc:cp6dzwj7qkn2sfoenl4g2kfl/app.bsky.feed.post/3mzvcaafd5c27", "p": 0.98, "model": "jev-1.14.0"}
+{"qid": "q22", "query": "book recommendations", "uri": "at://did:plc:z542xo2maedaxgk2hukerrer/app.bsky.feed.post/3mzvte235oc2t", "p": 0.63, "model": "jev-1.14.0"}
+{"qid": "q23", "query": "gardening", "uri": "at://did:plc:nsvqvsgxn5mnmrtbjtjv6zol/app.bsky.feed.post/3mzuaxgg4ci2p", "p": 0.95, "model": "jev-1.14.0"}
+{"qid": "q24", "query": "public transit and commuting", "uri": "at://did:plc:cekxa753t3k65ejbn3k7oqar/app.bsky.feed.post/3mzu5qz6re222", "p": 0.98, "model": "jev-1.14.0"}
+{"qid": "q24", "query": "public transit and commuting", "uri": "at://did:plc:5zww7zorx2ajw7hqrhuix3ba/app.bsky.feed.post/3mzurj3pck625", "p": 0.97, "model": "jev-1.14.0"}
+{"qid": "q24", "query": "public transit and commuting", "uri": "at://did:plc:pxokkpd3cyvbwgdwampv3soq/app.bsky.feed.post/3mzuhkzsrfv2s", "p": 0.91, "model": "jev-1.14.0"}
+{"qid": "q24", "query": "public transit and commuting", "uri": "at://did:plc:faip6wbgjk7oqu6fe6s5lbmj/app.bsky.feed.post/3mzuhk4yrha23", "p": 0.96, "model": "jev-1.14.0"}
+{"qid": "q26", "query": "getting ready for Christmas", "uri": "at://did:plc:5nvzwtsbweuk5ip7ttux2g73/app.bsky.feed.post/3mzvzbh3fe22x", "p": 0.7, "model": "jev-1.14.0"}
+{"qid": "q25", "query": "feeling sick with a cold or flu", "uri": "at://did:plc:bnx7gcualvnpqztbhquq2bjh/app.bsky.feed.post/3mzv445yfv22a", "p": 0.84, "model": "jev-1.14.0"}
+{"qid": "q26", "query": "getting ready for Christmas", "uri": "at://did:plc:cuov5xbls4ew52l3toud5roy/app.bsky.feed.post/3mzuhezu6yr2p", "p": 0.72, "model": "jev-1.14.0"}
+{"qid": "q28", "query": "Formula 1", "uri": "at://did:plc:hjw5aj2dkamnvdhuyqacdxbq/app.bsky.feed.post/57zrit4sgbkwc", "p": 0.9, "model": "jev-1.14.0"}
+{"qid": "q26", "query": "getting ready for Christmas", "uri": "at://did:plc:mdpgudjuuvubebjrohlefie3/app.bsky.feed.post/3mzw2ulo67r2o", "p": 0.85, "model": "jev-1.14.0"}
+{"qid": "q33", "query": "horror movies", "uri": "at://did:plc:xiuco4tuqztaejfr6e7ss7p5/app.bsky.feed.post/3mzuy4m2x6226", "p": 0.68, "model": "jev-1.14.0"}
+{"qid": "q30", "query": "video game recommendations", "uri": "at://did:plc:oaoyspw7h2n7xsj536wedkaw/app.bsky.feed.post/3mzurizddss2a", "p": 0.62, "model": "jev-1.14.0"}
+{"qid": "q29", "query": "new album release", "uri": "at://did:plc:2cnoqiemgk7hewmfi6dtfuc5/app.bsky.feed.post/3mzw44vqrkk2f", "p": 0.9, "model": "jev-1.14.0"}
+{"qid": "q31", "query": "Pokemon", "uri": "at://did:plc:qet6hjlhcjaoqvjuq5wii4gg/app.bsky.feed.post/3mzuelyag2k2c", "p": 0.97, "model": "jev-1.14.0"}
+{"qid": "q33", "query": "horror movies", "uri": "at://did:plc:xkrrlylbvmkuoawdrh4k2skh/app.bsky.feed.post/3mztpvlf3wk2d", "p": 0.97, "model": "jev-1.14.0"}
+{"qid": "q32", "query": "anime", "uri": "at://did:plc:4epksdziiiv6ofpzljttkki4/app.bsky.feed.post/3mzvnvmyv5x2m", "p": 0.98, "model": "jev-1.14.0"}
+{"qid": "q36", "query": "cryptocurrency investing", "uri": "at://did:plc:mmk2ipc25u2lfjfkumxy67az/app.bsky.feed.post/3mzv4rmsawj2w", "p": 0.47, "model": "jev-1.14.0"}
+{"qid": "q35", "query": "furniture on sale", "uri": "at://did:plc:fiw6sxrppk4hzuocjfo7ugxs/app.bsky.feed.post/3mzvlmin5w22x", "p": 0.26, "model": "jev-1.14.0"}
+{"qid": "q35", "query": "furniture on sale", "uri": "at://did:plc:f6oqkja34nmgyhb3eq4glzjn/app.bsky.feed.post/3mzvdai2suw2y", "p": 0.98, "model": "jev-1.14.0"}
+{"qid": "q36", "query": "cryptocurrency investing", "uri": "at://did:plc:52atvlllglwmqadbnfbg2ter/app.bsky.feed.post/3mzvb4ypmxc2m", "p": 0.05, "model": "jev-1.14.0"}
+{"qid": "q36", "query": "cryptocurrency investing", "uri": "at://did:plc:mhqnbglrgmwiuz3kgexbi7uf/app.bsky.feed.post/3mzvben6goz2a", "p": 0.11, "model": "jev-1.14.0"}
+{"qid": "q43", "query": "Bundeskanzler Merz und die Bundesregierung", "uri": "at://did:plc:h2ellgvx75az2yhsx4zvxcwc/app.bsky.feed.post/3mzvzz3ornx2c", "p": 0.62, "model": "jev-1.14.0"}
+{"qid": "q40", "query": "\u732b", "uri": "at://did:plc:hdpxcge4uinhw5rtfzrc3rm4/app.bsky.feed.post/3mzv6zp6m5s2a", "p": 0.98, "model": "jev-1.14.0"}
+{"qid": "q43", "query": "Bundeskanzler Merz und die Bundesregierung", "uri": "at://did:plc:ijpfo25z6psgts6gbkieum2a/app.bsky.feed.post/3mzvjcqp4rc2u", "p": 0.68, "model": "jev-1.14.0"}
+{"qid": "q43", "query": "Bundeskanzler Merz und die Bundesregierung", "uri": "at://did:plc:trdfsm22tzy5w4ue7l5pqfyt/app.bsky.feed.post/3mzvuq6in3u2f", "p": 0.85, "model": "jev-1.14.0"}
+{"qid": "q43", "query": "Bundeskanzler Merz und die Bundesregierung", "uri": "at://did:plc:oh433kookbqqh3ops74ohnik/app.bsky.feed.post/3mzvkdz4bsc2g", "p": 0.78, "model": "jev-1.14.0"}
+{"qid": "q45", "query": "earthquakes in Japan", "uri": "at://did:plc:zz3aaxkhiintia3k2yzdqau7/app.bsky.feed.post/3mzvgd2kjzb2p", "p": 0.02, "model": "jev-1.14.0"}
+{"qid": "q45", "query": "earthquakes in Japan", "uri": "at://did:plc:6jokdywlaolc7r2awoi3ngaj/app.bsky.feed.post/3mzum64a3hk2a", "p": 0.29, "model": "jev-1.14.0"}
+{"qid": "q46", "query": "Japanese Prime Minister Takaichi", "uri": "at://did:plc:tqcm5zeey6wgrvneafhbtzy3/app.bsky.feed.post/3mzutnxdmws2l", "p": 0.02, "model": "jev-1.14.0"}
+{"qid": "q46", "query": "Japanese Prime Minister Takaichi", "uri": "at://did:plc:3toxaxrtlirygih4ui5mzylo/app.bsky.feed.post/3mzv62y4nuc2i", "p": 0.68, "model": "jev-1.14.0"}
+{"qid": "q44", "query": "politique fran\u00e7aise", "uri": "at://did:plc:3zltwogjg2gi3efh5ath7oxy/app.bsky.feed.post/3mzvkz3nu3c2v", "p": 0.61, "model": "jev-1.14.0"}
+{"qid": "q23", "query": "gardening", "uri": "at://did:plc:s26gv6zbsaya7urbcnvaroxp/app.bsky.feed.post/3mzvjxyqnwl2y", "p": 0.97, "model": "jev-1.14.0"}

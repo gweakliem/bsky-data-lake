@@ -53,6 +53,11 @@ athena_results_retention_days = config.get_int("athenaResultsRetentionDays") or 
 # The embed job's stalled alarm notifies only once its CronJob runs: until then
 # (a suspended CronJob, a backfill run from a laptop) it has no logs to count.
 embed_alarm_actions = config.get_bool("embedAlarmActions", False)
+# Likewise for the search index job (indexAlarmActions).
+index_alarm_actions = config.get_bool("indexAlarmActions", False)
+# The EKS cluster (platform stack), for Container Insights' log group and alarms.
+cluster_name = config.get("clusterName") or "bsky"
+container_insights_retention_days = config.get_int("containerInsightsRetentionDays") or 14
 
 account_id = aws.get_caller_identity_output().account_id
 region = aws.get_region_output().region
@@ -552,6 +557,81 @@ embed_policy_document = pulumi.Output.all(account_id, region).apply(
     )
 )
 
+# --- IAM: the search index (WP E3) ---
+# A Lance dataset under lance/ in the warehouse bucket, outside Iceberg and Glue.
+# The index job reads post_embeddings and posts (with deletes and silver_runs)
+# and is the only writer of lance/; the search API only reads lance/.
+
+INDEX_READS = ["posts", "deletes", "silver_runs", EMBED_TABLE]
+LANCE_PREFIX = "lance"
+
+index_policy_document = pulumi.Output.all(account_id, region).apply(
+    lambda args: json.dumps(
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Sid": "ListFiles",
+                    "Effect": "Allow",
+                    "Action": "s3:ListBucket",
+                    "Resource": warehouse_bucket_arn,
+                    "Condition": {
+                        "StringLike": {
+                            "s3:prefix": [
+                                *[f"iceberg/{silver_database_name}/{t}/*" for t in INDEX_READS],
+                                f"{LANCE_PREFIX}/*",
+                            ]
+                        }
+                    },
+                },
+                {
+                    "Sid": "ReadSilver",
+                    "Effect": "Allow",
+                    "Action": "s3:GetObject",
+                    "Resource": [f"{warehouse_bucket_arn}/iceberg/{silver_database_name}/{t}/*" for t in INDEX_READS],
+                },
+                {
+                    "Sid": "WriteIndex",
+                    "Effect": "Allow",
+                    "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+                    "Resource": f"{warehouse_bucket_arn}/{LANCE_PREFIX}/*",
+                },
+                {
+                    "Sid": "ReadSilverCatalog",
+                    "Effect": "Allow",
+                    "Action": ["glue:GetDatabase", "glue:GetTable", "glue:GetTables"],
+                    "Resource": [
+                        f"arn:aws:glue:{args[1]}:{args[0]}:catalog",
+                        f"arn:aws:glue:{args[1]}:{args[0]}:database/{silver_database_name}",
+                        f"arn:aws:glue:{args[1]}:{args[0]}:table/{silver_database_name}/*",
+                    ],
+                },
+            ],
+        }
+    )
+)
+
+search_policy_document = json.dumps(
+    {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Sid": "ListIndex",
+                "Effect": "Allow",
+                "Action": "s3:ListBucket",
+                "Resource": warehouse_bucket_arn,
+                "Condition": {"StringLike": {"s3:prefix": [f"{LANCE_PREFIX}/*"]}},
+            },
+            {
+                "Sid": "ReadIndex",
+                "Effect": "Allow",
+                "Action": "s3:GetObject",
+                "Resource": f"{warehouse_bucket_arn}/{LANCE_PREFIX}/*",
+            },
+        ],
+    }
+)
+
 # --- Container logs: Fluent Bit on the cluster ships pod logs here ---
 
 # Created here, not by Fluent Bit, so it gets a retention period and the shipper
@@ -667,6 +747,38 @@ if manage_iam:
     embed_role = _pod_role("embed", "bsky-embed", "EKS pod role for the embedding job")
     aws.iam.RolePolicyAttachment("embed", role=embed_role.name, policy_arn=embed_policy.arn)
     pulumi.export("embed_role_arn", embed_role.arn)
+
+    index_policy = bsky_iam.policy(
+        "index",
+        name="bsky-index",
+        description="Read post embeddings and silver posts and write the Lance search index",
+        policy=index_policy_document,
+    )
+    index_role = _pod_role("index", "bsky-index", "EKS pod role for the search index job")
+    aws.iam.RolePolicyAttachment("index", role=index_role.name, policy_arn=index_policy.arn)
+    pulumi.export("index_role_arn", index_role.arn)
+
+    search_policy = bsky_iam.policy(
+        "search",
+        name="bsky-search",
+        description="Read the Lance search index",
+        policy=search_policy_document,
+    )
+    search_role = _pod_role("search", "bsky-search", "EKS pod role for the search API")
+    aws.iam.RolePolicyAttachment("search", role=search_role.name, policy_arn=search_policy.arn)
+    pulumi.export("search_role_arn", search_role.arn)
+
+    # The CloudWatch agent of the platform stack's amazon-cloudwatch-observability
+    # add-on (Container Insights). AWS's managed policy: metrics and its log group.
+    cloudwatch_agent_role = _pod_role(
+        "cloudwatch-agent", "bsky-cloudwatch-agent", "EKS pod role for the CloudWatch agent (Container Insights)"
+    )
+    aws.iam.RolePolicyAttachment(
+        "cloudwatch-agent",
+        role=cloudwatch_agent_role.name,
+        policy_arn="arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
+    )
+    pulumi.export("cloudwatch_agent_role_arn", cloudwatch_agent_role.arn)
 
     # --- Glue table optimizers: compaction, snapshot retention, orphan files ---
     # Maintenance runs in the catalog rather than the pipeline, so moving to
@@ -891,6 +1003,143 @@ embed_stalled = aws.cloudwatch.MetricAlarm(
     opts=pulumi.ResourceOptions(depends_on=[embed_chunks]),
 )
 
+# The index job logs one line per finished run ("bsky_search.index: run {...}"),
+# after the spans and upkeep. Runs are hourly at :40, after embed's, so two
+# clock hours without one means two runs failed, hung or never started.
+index_runs = aws.cloudwatch.LogMetricFilter(
+    "index-runs",
+    name="bsky-index-runs",
+    log_group_name=container_logs.name,
+    pattern='"bsky_search.index: run"',
+    metric_transformation=aws.cloudwatch.LogMetricFilterMetricTransformationArgs(
+        namespace=SILVER_METRIC_NAMESPACE,
+        name="IndexRunsFinished",
+        value="1",
+        default_value="0",
+    ),
+)
+index_stalled = aws.cloudwatch.MetricAlarm(
+    "index-stalled",
+    name="bsky-index-stalled",
+    alarm_description="No search index run finished in two clock hours: index runs are failing, hung or not starting",
+    namespace=SILVER_METRIC_NAMESPACE,
+    metric_name="IndexRunsFinished",
+    statistic="Sum",
+    period=3600,
+    evaluation_periods=2,
+    comparison_operator="LessThanThreshold",
+    threshold=1,
+    treat_missing_data="breaching",
+    actions_enabled=index_alarm_actions,
+    alarm_actions=[alerts.arn],
+    ok_actions=[alerts.arn],
+    opts=pulumi.ResourceOptions(depends_on=[index_runs]),
+)
+
+# --- Container Insights: pod and node metrics from the CloudWatch agent ---
+# The agent writes its readings to this log group as embedded metrics. Created
+# here so it gets a retention period; the agent would otherwise create it
+# without one. The metrics themselves (namespace ContainerInsights) are kept
+# by CloudWatch on its usual schedule.
+container_insights_logs = aws.cloudwatch.LogGroup(
+    "container-insights",
+    name=f"/aws/containerinsights/{cluster_name}/performance",
+    retention_in_days=container_insights_retention_days,
+)
+
+
+def _insights_alarm(resource_name: str, name: str, description: str, query: str, threshold: float,
+                    *, missing: str, minutes: int = 1) -> aws.cloudwatch.MetricAlarm:
+    """An alarm on a Metrics Insights query over the workloads' namespace: the max over `minutes`.
+
+    One period of `minutes`, not that many one-minute periods in a row: the agent
+    skips minutes (seen 2026-11-13 for a crash-looping pod), and a skipped minute
+    counts as not breaching, which would reset a run of one-minute periods.
+    """
+    return aws.cloudwatch.MetricAlarm(
+        resource_name,
+        name=name,
+        alarm_description=description,
+        metric_queries=[
+            aws.cloudwatch.MetricAlarmMetricQueryArgs(id="q", expression=query, period=60 * minutes, return_data=True)
+        ],
+        evaluation_periods=1,
+        comparison_operator="GreaterThanOrEqualToThreshold",
+        threshold=threshold,
+        treat_missing_data=missing,
+        alarm_actions=[alerts.arn],
+        ok_actions=[alerts.arn],
+    )
+
+
+_where = f"WHERE ClusterName = '{cluster_name}' AND Namespace = 'bsky'"
+# The dimension set the agent publishes per pod (checked 2026-11-13: there is no
+# ContainerName, whatever the docs list).
+_pod_dims = "ContainerInsights, ClusterName, Namespace, PodName"
+# Jobs' pods come and go, so these alarm on the max over every pod in the namespace.
+pod_memory_high = _insights_alarm(
+    "pod-memory-high",
+    "bsky-pod-memory-high",
+    "A bsky pod peaked at 90% or more of its memory limit: it is close to being OOMKilled",
+    f"SELECT MAX(pod_memory_utilization_over_pod_limit) FROM SCHEMA({_pod_dims}) {_where}",
+    90,
+    missing="notBreaching",  # no pods with limits running (between job runs) is fine
+    minutes=5,
+)
+# These two exist only once a container has restarted for that reason (a
+# Deployment's pods, which restart), so no data is OK.
+pod_oom_killed = _insights_alarm(
+    "pod-oom-killed",
+    "bsky-pod-oom-killed",
+    "A container in bsky was OOMKilled and restarted",
+    f"SELECT MAX(pod_container_status_terminated_reason_oom_killed) FROM SCHEMA({_pod_dims}) {_where}",
+    1,
+    missing="notBreaching",
+)
+pod_crash_looping = _insights_alarm(
+    "pod-crash-looping",
+    "bsky-pod-crash-looping",
+    "A container in bsky is in CrashLoopBackOff",
+    f"SELECT MAX(pod_container_status_waiting_reason_crash_loop_back_off) FROM SCHEMA({_pod_dims}) {_where}",
+    1,
+    missing="notBreaching",
+    minutes=5,
+)
+
+# A Job that failed: its pods exited non-zero (an OOM kill included) past its
+# backoff limit, or it ran past its deadline. Container Insights can't see
+# these (it reports running pods only); the apps stack's event exporter logs
+# the Job's event as a JSON line. Any Job, CronJob runs and one-offs alike.
+job_failures = aws.cloudwatch.LogMetricFilter(
+    "job-failures",
+    name="bsky-job-failures",
+    log_group_name=container_logs.name,
+    pattern='{ $.involvedObject.kind = "Job" && ($.reason = "BackoffLimitExceeded" || $.reason = "DeadlineExceeded") }',
+    metric_transformation=aws.cloudwatch.LogMetricFilterMetricTransformationArgs(
+        namespace=SILVER_METRIC_NAMESPACE,
+        name="JobFailures",
+        value="1",
+        default_value="0",
+    ),
+)
+job_failed = aws.cloudwatch.MetricAlarm(
+    "job-failed",
+    name="bsky-job-failed",
+    alarm_description="A Job in bsky failed (BackoffLimitExceeded or DeadlineExceeded): see kubectl -n bsky get jobs",
+    namespace=SILVER_METRIC_NAMESPACE,
+    metric_name="JobFailures",
+    statistic="Sum",
+    period=300,
+    evaluation_periods=1,
+    comparison_operator="GreaterThanOrEqualToThreshold",
+    threshold=1,
+    # No log lines in five minutes is the normal case.
+    treat_missing_data="notBreaching",
+    alarm_actions=[alerts.arn],
+    ok_actions=[alerts.arn],
+    opts=pulumi.ResourceOptions(depends_on=[job_failures]),
+)
+
 # Account-wide: filtering by the project tag would need cost allocation tags
 # activated by an admin.
 budget = aws.budgets.Budget(
@@ -921,6 +1170,7 @@ pulumi.export("athena_results_bucket", athena_results.bucket)
 pulumi.export("glue_database", database.name)
 pulumi.export("silver_glue_database", silver_database.name)
 pulumi.export("silver_location", f"{warehouse}/{silver_database_name}")
+pulumi.export("lance_uri", f"s3://{warehouse_bucket}/{LANCE_PREFIX}")
 pulumi.export("reports_site_url", f"s3://{warehouse_bucket}/{reports_site_prefix}")
 pulumi.export("raw_location", f"s3://{bucket}/{raw_prefix.rstrip('/')}")
 pulumi.export("raw_table_location", f"{warehouse}/{glue_database}/jetstream")

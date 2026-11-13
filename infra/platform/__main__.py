@@ -223,7 +223,7 @@ ecr_lifecycle = json.dumps(
 )
 
 repositories = {}
-for image in ["iceberg-loader", "ingest", "silver", "reports", "embed"]:
+for image in ["iceberg-loader", "ingest", "silver", "reports", "embed", "search"]:
     repo = aws.ecr.Repository(
         image,
         name=f"bsky/{image}",
@@ -271,6 +271,21 @@ pod_identities = {
         service_account="embed",
         role_arn=data.require_output("embed_role_arn"),
     ),
+    # One image (bsky/search) for both: the index CronJob writes, the API reads.
+    "index": aws.eks.PodIdentityAssociation(
+        "index",
+        cluster_name=cluster.name,
+        namespace=namespace,
+        service_account="index",
+        role_arn=data.require_output("index_role_arn"),
+    ),
+    "search": aws.eks.PodIdentityAssociation(
+        "search",
+        cluster_name=cluster.name,
+        namespace=namespace,
+        service_account="search",
+        role_arn=data.require_output("search_role_arn"),
+    ),
     # Cluster-wide log shipping, so it lives outside the workloads' namespace.
     "fluent-bit": aws.eks.PodIdentityAssociation(
         "fluent-bit",
@@ -280,6 +295,42 @@ pod_identities = {
         role_arn=data.require_output("fluent_bit_role_arn"),
     ),
 }
+
+# --- Observability add-ons: pod and node metrics ---
+
+# Live CPU and memory (`kubectl top`); no history.
+metrics_server = aws.eks.Addon(
+    "metrics-server",
+    cluster_name=cluster.name,
+    addon_name="metrics-server",
+    addon_version=config.get("metricsServerVersion") or "v0.9.1-eksbuild.1",
+)
+
+# Container Insights (enhanced observability): pod and node metrics kept in
+# CloudWatch, behind the data stack's pod alarms. Only the agent's metrics are
+# wanted: our own Fluent Bit already ships container logs, and the rest
+# (Application Signals tracing, GPU/Neuron monitors, the OTEL pipeline's
+# exporters) is off. The agent's IAM role comes from the data stack.
+CLOUDWATCH_OBSERVABILITY_CONFIG = {
+    "containerLogs": {"enabled": False},
+    "applicationSignals": {"enabled": False},
+    "dcgmExporter": {"enabled": False},
+    "neuronMonitor": {"enabled": False},
+    "kubeStateMetrics": {"enabled": False},
+    "nodeExporter": {"enabled": False},
+}
+cloudwatch_observability = aws.eks.Addon(
+    "cloudwatch-observability",
+    cluster_name=cluster.name,
+    addon_name="amazon-cloudwatch-observability",
+    addon_version=config.get("cloudwatchObservabilityVersion") or "v7.0.1-eksbuild.1",
+    configuration_values=json.dumps(CLOUDWATCH_OBSERVABILITY_CONFIG),
+    pod_identity_associations=[
+        aws.eks.AddonPodIdentityAssociationArgs(
+            service_account="cloudwatch-agent", role_arn=data.require_output("cloudwatch_agent_role_arn")
+        )
+    ],
+)
 
 
 def _kubeconfig(args: list[str]) -> str:

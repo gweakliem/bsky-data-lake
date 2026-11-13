@@ -13,7 +13,8 @@ Run the ingestor, the Iceberg loader and the pipeline jobs from [data-pipeline.m
 | `bsky-silver` | CronJob | hourly | warehouse S3, Glue |
 | `bsky-classify` | CronJob | hourly, after silver | warehouse S3, Glue, TypeSafe API key |
 | `bsky-embed` | CronJob | hourly, after silver | warehouse S3, Glue; GPU node if E1 picks a model that needs one |
-| search API (E3) | Deployment + Service | 1–2 | warehouse S3 (index) read |
+| `bsky-index` (E3) | CronJob | hourly, after embed | warehouse S3, Glue; writes only the Lance prefix |
+| search API (E3) | Deployment + Service | 1 (6–8 Gi, 30-day index) | warehouse S3 (index) read |
 | table maintenance | Glue table optimizers (managed) | continuous | Glue, warehouse S3 |
 
 **Why `Recreate` and exactly one replica for the ingestor:** Jetstream is a single stream, so a second replica writes duplicate data, and a rolling update would briefly run two. The restart gap is covered by cursor resume (P1). The pipeline's dedup handles the overlap.
@@ -220,6 +221,32 @@ D4 is split so the loader, which recovers easily, is the first workload deployed
 - **Tested 2026-11-02:** scaling the loader to 0 fired `bsky-loader-behind` after 26 min, and it cleared 8 min after scaling back. Scaling the ingestor to 0 fired `bsky-ingest-stalled` after 19 min, and it cleared 4 min after scaling back; the ingestor resumed from its last file and replayed the gap. A stale `s3:TestEvent` in the DLQ fired `bsky-dead-letters`. Every email arrived.
 - **Tested 2026-11-10:** suspending the silver CronJob after its 13:10Z window fired `bsky-silver-stalled` at 15:11Z (two empty clock hours). It cleared at 15:43Z, two minutes after a catch-up Job started, once it committed a window; the Job caught up the backlog in 15 minutes. That completes D6's alarm acceptance.
 
+- **Pod metrics and Job failures (2026-11-13).**
+  - **Why:** a 2.5M-post span OOMKilled the first in-cluster index load, and nothing showed it. There was no pod memory metric, no record of the kill, and events expire after about an hour.
+  - **Platform stack (EKS add-ons):**
+    - **`metrics-server`:** live `kubectl top`.
+    - **`amazon-cloudwatch-observability`:** Container Insights with enhanced observability. Its Pod Identity role `bsky-cloudwatch-agent` (data stack) uses AWS's `CloudWatchAgentServerPolicy`. It writes to `/aws/containerinsights/bsky/performance`, kept 14 days.
+    - **This reverses the earlier choice against the add-on, for metrics only.** The add-on's container logs are off (our Fluent Bit ships them). So are Application Signals, the GPU and Neuron monitors and the OTEL exporters, which v7 turns on by default. Its webhooks fail open (`Ignore`).
+    - **Cost:** priced per observation ($0.21 per 1M). An estimated $15–25 a month for this cluster; check at the cost review.
+  - **Apps stack: the `event-exporter` Deployment.**
+    - It runs `ghcr.io/resmoio/kubernetes-event-exporter:v1.7`, the last release (2024-02), from a repo that is still active.
+    - It writes each `bsky` event as a JSON line, which Fluent Bit ships, so events are kept 14 days.
+    - It is scoped by `namespace: bsky` and `omitLookup: true`, with a namespaced Role on `events` only. The upstream manifests' ClusterRole would read every object, Secrets included.
+  - **Alarms (data stack):** the three pod alarms are Metrics Insights queries over `SCHEMA(ContainerInsights, ClusterName, Namespace, PodName)`, the max over one 5-minute period.
+    - `bsky-pod-memory-high`: a pod's `pod_memory_utilization_over_pod_limit` peaked at 90% or more.
+    - `bsky-pod-oom-killed`: `pod_container_status_terminated_reason_oom_killed`.
+    - `bsky-pod-crash-looping`: `pod_container_status_waiting_reason_crash_loop_back_off`.
+    - `bsky-job-failed`: a log metric filter on the exporter's `Job` events with reason `BackoffLimitExceeded` or `DeadlineExceeded`.
+  - **What the tests showed (2026-11-13):**
+    - **Container Insights reports running pods only.** A Job's failed pod (`restartPolicy: Never`) vanishes from its metrics, so it can't alarm on Job failures (`pod_status_failed` stayed 0). The exporter does.
+    - **The reason metrics come from a container's last state,** so they appear only once a container has restarted. They cover Deployments, not Jobs.
+    - **The metrics carry no `ContainerName` dimension, though the AWS docs list one.** A SCHEMA naming it matches nothing.
+    - **The agent skips minutes.** One-minute periods with missing data treated as OK never saw five breaching minutes in a row. Hence one 5-minute max.
+    - **Results:**
+      - A throwaway OOM pod with restarts fired `bsky-pod-oom-killed`.
+      - After the change to a 5-minute max, the same pod also fired `bsky-pod-crash-looping` within 60 s.
+      - A Job exiting 1 with `backoffLimit: 0` fired `bsky-job-failed` within 60 s.
+  - **Not covered:** a Job that hangs or never starts emits no failure event. The per-job stalled alarms cover that for silver, embed and index.
 - **Depends on:** D4 (expand as D5 adds jobs).
 - **Logs (done 2026-11-02):** a Fluent Bit DaemonSet (apps stack, `logging` namespace) ships the `bsky` namespace's container logs to the log group `/bsky/containers` (data stack, 14 days), one stream per `<pod>.<container>`. Chosen over the CloudWatch Observability add-on, which would add an operator, agents and auto-instrumentation to a one-node cluster; only Fluent Bit's `[OUTPUT]` is AWS-specific. Logs Insights, for example commit-conflict retries:
 
@@ -237,7 +264,8 @@ D4 is split so the loader, which recovers easily, is the first workload deployed
   | Ingest stalled | raw queue `NumberOfMessagesSent` < 1 over 15 min | ingestor stopped writing (needs no ingestor metrics) |
   | Loader behind | raw queue `ApproximateAgeOfOldestMessage` > 15 min | loader stuck or down |
   | Poison messages | DLQ `ApproximateNumberOfMessagesVisible` > 0 | a file or notification failing repeatedly |
-  | Job failures | Kubernetes Job failures (Container Insights metric or kube-state-metrics) | a silver, classify or embed run failed |
+  | Job failures | `bsky-job-failed`: the event exporter's `BackoffLimitExceeded`/`DeadlineExceeded` Job events | any Job failed, CronJob runs and one-offs |
+  | Pod memory, OOM, crash loops | `bsky-pod-memory-high`, `bsky-pod-oom-killed`, `bsky-pod-crash-looping` (Container Insights) | a pod near its limit, or a Deployment's container killed or looping |
 
 - **Pipeline latency (backlog, raised 2026-11-11):** how long each layer takes, from Jetstream to bronze, silver, and the classify and embed tables, and each job's run time. Kept as metrics (for example a CloudWatch metric per job from its run log line), not as ingestion-time columns in every table. Silver already logs per-window timing.
 - **Cost:**

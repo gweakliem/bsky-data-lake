@@ -31,7 +31,7 @@ POSTS = Schema(
     opt(5, "operation", StringType()), opt(6, "langs", ListType(20, StringType(), element_required=False)),
     opt(7, "text", StringType()), opt(8, "image_alts", ListType(21, StringType(), element_required=False)),
     opt(9, "external_uri", StringType()), opt(10, "external_title", StringType()),
-    opt(11, "bronze_ingested_at", TimestamptzType()),
+    opt(11, "bronze_ingested_at", TimestamptzType()), opt(12, "created_at", TimestamptzType()),
 )
 DELETES = Schema(
     opt(1, "uri", StringType()), opt(2, "collection", StringType()), opt(3, "day", DateType()),
@@ -49,14 +49,16 @@ def silver_catalog(tmp_path) -> SqlCatalog:
     return c
 
 
-def add_posts(cat, rows: list[tuple[str, dt.datetime]], text: str = "hello world") -> None:
-    """Posts by (uri, bronze_ingested_at), all with the same text unless given."""
+def add_posts(cat, rows: list[tuple[str, dt.datetime]], text: str = "hello world", *, cid: str = "c",
+              operation: str = "create", day: dt.date = DAY) -> None:
+    """Posts by (uri, bronze_ingested_at), all with the same text, cid, operation and day unless given."""
     n = len(rows)
     cat.load_table(f"{inc.SILVER}.posts").append(pa.table({
-        "uri": [u for u, _ in rows], "cid": ["c"] * n, "did": ["did:plc:a"] * n, "day": [DAY] * n,
-        "operation": ["create"] * n, "langs": pa.array([["en"]] * n, pa.list_(pa.string())), "text": [text] * n,
+        "uri": [u for u, _ in rows], "cid": [cid] * n, "did": ["did:plc:a"] * n, "day": [day] * n,
+        "operation": [operation] * n, "langs": pa.array([["en"]] * n, pa.list_(pa.string())), "text": [text] * n,
         "image_alts": pa.array([[]] * n, pa.list_(pa.string())), "external_uri": pa.array([None] * n, pa.string()),
         "external_title": pa.array([None] * n, pa.string()), "bronze_ingested_at": pa.array([m for _, m in rows], TS),
+        "created_at": pa.array([m for _, m in rows], TS),
     }))
 
 

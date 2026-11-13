@@ -77,6 +77,10 @@ Alarms and budget alerts go to the SNS topic `bsky-alerts`, which emails `BSKY_A
 | `bsky-loader-behind` | the oldest queued notification is over 15 min old | loader pod status and logs: OOM kills, Glue commit errors, S3 permission errors. |
 | `bsky-silver-stalled` | no silver window committed in two clock hours (metric `bsky/SilverWindowsCommitted`, from silver's `run <id>: bronze (...]` log lines) | `kubectl -n bsky get jobs`, then the failed Job's logs (or `aws logs tail /bsky/containers --log-stream-name-prefix silver-`): OOM kills, Sail errors, commit conflicts past the retries. Silver resumes from `silver_runs`, so the next good run catches up. |
 | `bsky-dead-letters` | anything in `bsky-raw-files-dlq` | a file or notification failed 5 times. Read the message (below) and the loader logs from that time. |
+| `bsky-job-failed` | a Job in `bsky` hit its backoff limit or deadline | find the Job with the query under "Which Job failed" below, then its pod logs. |
+| `bsky-pod-oom-killed` | a container in `bsky` was OOM-killed and restarted | the pod's memory limit against its use (`kubectl top pod -n bsky`). A Job pod that fails without restarting shows up as `bsky-job-failed` instead. |
+| `bsky-pod-crash-looping` | a container in `bsky` is in CrashLoopBackOff | `kubectl -n bsky describe pod`, then `kubectl -n bsky logs <pod> --previous`. |
+| `bsky-pod-memory-high` | a pod used over 90% of its memory limit for 5 min | raise its limit before it's OOM-killed, or find what grew. |
 
 Read dead letters without removing them:
 
@@ -84,6 +88,20 @@ Read dead letters without removing them:
 DLQ=$(aws sqs get-queue-url --queue-name bsky-raw-files-dlq --query QueueUrl --output text)
 aws sqs receive-message --queue-url "$DLQ" --max-number-of-messages 10 --visibility-timeout 0
 ```
+
+### Which Job failed (`bsky-job-failed`)
+
+The alarm only says some Job failed. The event exporter logs each Kubernetes event to `/bsky/containers` as JSON, so the alarm's own filter names the Job:
+
+```bash
+aws logs filter-log-events --log-group-name /bsky/containers \
+  --start-time $(( ($(date +%s) - 3*3600) * 1000 )) \
+  --filter-pattern '{ $.involvedObject.kind = "Job" && ($.reason = "BackoffLimitExceeded" || $.reason = "DeadlineExceeded") }' \
+  --query 'events[].message' --output text | tr '\t' '\n' \
+  | jq -r '[.lastTimestamp, .involvedObject.name, .reason] | @tsv'
+```
+
+The failed pods are usually gone by then. Their logs stay in `/bsky/containers` under `<pod>.<container>`; list a Job's streams with `aws logs describe-log-streams --log-group-name /bsky/containers --log-stream-name-prefix <job-name>`. `kubectl -n bsky get jobs` shows only the last 3 failed Jobs per CronJob. A one-off Job (`kubectl create job --from=cronjob/...`) that fails also fires this alarm.
 
 An `s3:TestEvent` message is S3 confirming a notification config change, not a failure; delete it. After fixing the cause of real failures, redrive them to the main queue with `aws sqs start-message-move-task --source-arn <dlq-arn>`. The loader skips files that are already in bronze, so a redrive doesn't duplicate rows.
 

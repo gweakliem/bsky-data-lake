@@ -56,6 +56,9 @@ pulumi.runtime.set_config("bsky-apps:searchImageTag", "aaa3333")
 _key_file = Path(tempfile.mkdtemp()) / "openrouter-key"
 _key_file.write_text("sk-or-test\n")
 os.environ["BSKY_OPENROUTER_KEY_FILE"] = str(_key_file)
+_htpasswd_file = Path(tempfile.mkdtemp()) / "reports-htpasswd"
+_htpasswd_file.write_text("demo:$2y$05$testhashtesthashtesthashtesthashtesthashtesthashtes\n")
+os.environ["BSKY_REPORTS_HTPASSWD_FILE"] = str(_htpasswd_file)
 
 _spec = importlib.util.spec_from_file_location("apps_stack", Path(__file__).with_name("__main__.py"))
 apps = importlib.util.module_from_spec(_spec)
@@ -232,19 +235,40 @@ def test_reports_cronjob():
 
 
 @pulumi.runtime.test
-def test_reports_web_serves_the_synced_site_privately():
+def test_reports_web_serves_the_synced_site_publicly_behind_a_login():
     def check(args):
-        spec, service = args
+        spec, service, service_meta = args
         pod = spec["template"]["spec"]
         assert pod["service_account_name"] == "reports"
         containers = {c["name"]: c for c in pod["containers"]}
         assert containers["sync"]["image"] == f"{REPORTS_REPO_URL}:ccc1111"
         assert containers["sync"]["args"] == ["s3://test-warehouse/reports", "/site"]
-        assert {m["mount_path"]: m.get("read_only") for m in containers["nginx"]["volume_mounts"]}["/site"] is True
-        assert service["type"] == "ClusterIP"
+        mounts = {m["mount_path"]: m.get("read_only") for m in containers["nginx"]["volume_mounts"]}
+        assert mounts["/site"] is True
+        assert mounts["/etc/nginx/auth"] is True
+        volumes = {v["name"]: v for v in pod["volumes"]}
+        assert volumes["auth"]["secret"]["secret_name"] == "reports-web-auth"
         assert "try_files $uri $uri.html" in apps.reports_nginx_conf
+        assert "auth_basic_user_file /etc/nginx/auth/htpasswd;" in apps.reports_nginx_conf
+        assert service["type"] == "LoadBalancer"
+        assert service["load_balancer_class"] == "eks.amazonaws.com/nlb"
+        assert service_meta["annotations"]["service.beta.kubernetes.io/aws-load-balancer-scheme"] == "internet-facing"
 
-    return pulumi.Output.all(apps.reports_web.spec, apps.reports_service.spec).apply(check)
+    return pulumi.Output.all(
+        apps.reports_web.spec, apps.reports_service.spec, apps.reports_service.metadata
+    ).apply(check)
+
+
+@pulumi.runtime.test
+def test_reports_login_comes_from_the_htpasswd_file_as_a_secret():
+    def check(args):
+        data, is_secret = args
+        assert data == {"htpasswd": _htpasswd_file.read_text()}
+        assert is_secret
+
+    return pulumi.Output.all(
+        apps.reports_htpasswd.string_data, pulumi.Output.is_secret(apps.reports_htpasswd.string_data)
+    ).apply(check)
 
 
 @pulumi.runtime.test

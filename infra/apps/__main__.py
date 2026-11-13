@@ -22,7 +22,18 @@ region = config.get("region") or "us-west-2"
 loader_image_tag = config.require("loaderImageTag")
 ingest_image_tag = config.require("ingestImageTag")
 
-provider = k8s.Provider("eks", kubeconfig=platform.require_output("kubeconfig"))
+# ConfigMaps and Secrets update in place. By default the provider replaces one
+# whose data changes, and with fixed names the create-before-delete replacement
+# fails ("already exists"). Pods that read a ConfigMap carry its hash as a
+# pod-template annotation, so a change still rolls them. Mounted Secrets (the
+# reports login) refresh in the pod within about a minute; env-var Secrets (the
+# OpenRouter key) are read when each Job pod starts.
+provider = k8s.Provider(
+    "eks",
+    kubeconfig=platform.require_output("kubeconfig"),
+    enable_config_map_mutable=True,
+    enable_secret_mutable=True,
+)
 opts = pulumi.ResourceOptions(provider=provider)
 
 namespace_name = platform.require_output("namespace")
@@ -500,7 +511,7 @@ search = k8s.apps.v1.Deployment(
     opts=opts,
 )
 
-# ClusterIP only, like reports-web: `kubectl -n bsky port-forward svc/search 8000:80`.
+# ClusterIP only: `kubectl -n bsky port-forward svc/search 8000:80`.
 search_service = k8s.core.v1.Service(
     "search",
     metadata=k8s.meta.v1.ObjectMetaArgs(name="search", namespace=ns, labels=search_labels),
@@ -669,10 +680,36 @@ reports_build = k8s.batch.v1.CronJob(
     opts=opts,
 )
 
+# Demo access for a few people: one shared login (HTTP basic auth) in front of a
+# public load balancer. Not a real auth system; replace it before any wider use.
+# The htpasswd file lives outside the repo, like the OpenRouter key. Create or
+# change it with `htpasswd -cB ~/.config/bsky-data-lake/reports-htpasswd <user>`
+# (bcrypt; musl's crypt in the Alpine nginx image checks it), then `pulumi up`.
+# nginx rereads the file on each request, so a password change needs no restart.
+reports_htpasswd_file = Path(
+    config.get("reportsHtpasswdFile")
+    or os.environ.get("BSKY_REPORTS_HTPASSWD_FILE")
+    or "~/.config/bsky-data-lake/reports-htpasswd"
+).expanduser()
+if not reports_htpasswd_file.is_file():
+    raise ValueError(
+        f"{reports_htpasswd_file} not found: create it with `htpasswd -cB {reports_htpasswd_file} <user>` "
+        "(mode 600), or point reportsHtpasswdFile / BSKY_REPORTS_HTPASSWD_FILE at it"
+    )
+reports_htpasswd = k8s.core.v1.Secret(
+    "reports-web-auth",
+    metadata=k8s.meta.v1.ObjectMetaArgs(name="reports-web-auth", namespace=ns, labels=reports_web_labels),
+    type="Opaque",
+    string_data={"htpasswd": pulumi.Output.secret(reports_htpasswd_file.read_text())},
+    opts=opts,
+)
+
 # Framework links pages without .html (/activity), hence try_files.
 reports_nginx_conf = """server {
     listen 8080;
     root /site/current;
+    auth_basic "bsky reports";
+    auth_basic_user_file /etc/nginx/auth/htpasswd;
     location / {
         try_files $uri $uri.html $uri/ =404;
     }
@@ -711,6 +748,7 @@ reports_web = k8s.apps.v1.Deployment(
                         volume_mounts=[
                             k8s.core.v1.VolumeMountArgs(name="site", mount_path="/site", read_only=True),
                             k8s.core.v1.VolumeMountArgs(name="nginx-conf", mount_path="/etc/nginx/conf.d", read_only=True),
+                            k8s.core.v1.VolumeMountArgs(name="auth", mount_path="/etc/nginx/auth", read_only=True),
                         ],
                         security_context=container_security,
                     ),
@@ -734,6 +772,10 @@ reports_web = k8s.apps.v1.Deployment(
                         name="nginx-conf",
                         config_map=k8s.core.v1.ConfigMapVolumeSourceArgs(name=reports_nginx_config.metadata.name),
                     ),
+                    k8s.core.v1.VolumeArgs(
+                        name="auth",
+                        secret=k8s.core.v1.SecretVolumeSourceArgs(secret_name=reports_htpasswd.metadata.name),
+                    ),
                 ],
             ),
         ),
@@ -741,12 +783,20 @@ reports_web = k8s.apps.v1.Deployment(
     opts=opts,
 )
 
-# ClusterIP only: viewed through `kubectl port-forward`, never exposed outside the cluster.
+# Public over plain HTTP through an internet-facing NLB (EKS Auto Mode creates it in
+# the public subnets), behind the basic-auth login above. No TLS: there's no domain
+# or certificate, so the login crosses the network in the clear. Demo only.
 reports_service = k8s.core.v1.Service(
     "reports-web",
-    metadata=k8s.meta.v1.ObjectMetaArgs(name="reports-web", namespace=ns, labels=reports_web_labels),
+    metadata=k8s.meta.v1.ObjectMetaArgs(
+        name="reports-web",
+        namespace=ns,
+        labels=reports_web_labels,
+        annotations={"service.beta.kubernetes.io/aws-load-balancer-scheme": "internet-facing"},
+    ),
     spec=k8s.core.v1.ServiceSpecArgs(
-        type="ClusterIP",
+        type="LoadBalancer",
+        load_balancer_class="eks.amazonaws.com/nlb",
         selector=reports_web_labels,
         ports=[k8s.core.v1.ServicePortArgs(name="http", port=80, target_port="http")],
     ),
@@ -907,5 +957,14 @@ fluent_bit = k8s.apps.v1.DaemonSet(
 )
 
 pulumi.export("namespace", ns)
+# Empty until the load balancer is provisioned; `kubectl -n bsky get svc reports-web` also shows it.
+pulumi.export(
+    "reports_url",
+    reports_service.status.apply(
+        lambda s: f"http://{s.load_balancer.ingress[0].hostname}"
+        if s and s.load_balancer and s.load_balancer.ingress
+        else ""
+    ),
+)
 pulumi.export("loader_image", loader_image)
 pulumi.export("ingest_image", ingest_image)

@@ -178,13 +178,15 @@ kubectl -n bsky create job --from=cronjob/silver silver-manual-$(date +%s)
 The report site (`reports/`: pipeline health, activity, languages) is built hourly at `:30` by the CronJob `reports`, which queries the lake with DuckDB, builds the static site and uploads it to `s3://<warehouse>/reports/builds/<time>/`, then points `reports/current` at it (the last 3 builds are kept). The Deployment `reports-web` serves it: a `sync` sidecar checks `reports/current` every minute and swaps in a new build, and nginx serves the local copy. A failed build exits non-zero before uploading anything, so the previous site stays up.
 
 ```bash
-kubectl -n bsky port-forward svc/reports-web 8080:80     # then open http://localhost:8080
+(cd infra/apps && pulumi stack output reports_url --stack dev)   # the public address
 kubectl -n bsky create job --from=cronjob/reports reports-manual-$(date +%s)   # build now
 kubectl -n bsky logs job/<job-name> -f                   # the build's output
 kubectl -n bsky logs deploy/reports-web -c sync          # "serving build ..." when a new build is picked up
 ```
 
-Nothing is exposed outside the cluster (ClusterIP only). The page header says when the build ran; if it's over an hour old, check the latest `reports-` Job's logs (`kubectl -n bsky get jobs`, or `aws logs tail /bsky/containers --log-stream-name-prefix reports-`).
+**Access (demo only):** the Service is an internet-facing NLB over plain HTTP, behind one shared basic-auth login. The bcrypt htpasswd file lives outside the repo at `~/.config/bsky-data-lake/reports-htpasswd` (override with `reportsHtpasswdFile` / `BSKY_REPORTS_HTPASSWD_FILE`). To change the password, run `htpasswd -cB <file> <user>` and then `pulumi up` the apps stack. nginx rereads the file on each request, so no restart is needed. With no TLS, the login crosses the network in the clear, so don't reuse a real password. This needs real auth and HTTPS before any wider use.
+
+The page header says when the build ran; if it's over an hour old, check the latest `reports-` Job's logs (`kubectl -n bsky get jobs`, or `aws logs tail /bsky/containers --log-stream-name-prefix reports-`).
 
 ## Deploy a new image
 

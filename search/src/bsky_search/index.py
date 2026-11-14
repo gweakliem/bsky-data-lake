@@ -56,6 +56,11 @@ POST_COLUMNS = (*inc.POST_COLUMNS, "created_at")
 MIN_VECTOR_INDEX_ROWS = 100_000  # below this a flat scan is fast and IVF-PQ trains poorly
 SUB_VECTORS = 64  # 16 dims each: 64 bytes a vector in memory
 TRAIN_SAMPLE_RATE = 64
+# Each optimize() adds a vector-index delta, and a query probes every delta. At 20 deltas a
+# query made 7,700 partition loads and took 11-33 s (2026-11-14), so deltas past the first
+# (the trained base) are merged into one. lancedb's optimize() can't merge; pylance can.
+MAX_VECTOR_DELTAS = 2
+VECTOR_INDEX = "vector_idx"
 DELETE_BATCH = 1000
 # Memory is about 10 KB a row while a span is joined (dry run: 1.8 GB at 100k rows),
 # so a span with more rows is split by time. An ingest catch-up after an outage puts
@@ -337,6 +342,22 @@ def maintain(table, reindex: bool = False) -> None:
                                                   num_sub_vectors=SUB_VECTORS, sample_rate=TRAIN_SAMPLE_RATE))
     # Compaction, new rows into every index, and versions older than a day (a reader may still hold one).
     table.optimize(cleanup_older_than=dt.timedelta(days=1))
+    merge_vector_deltas(table)
+
+
+def merge_vector_deltas(table, keep: int = MAX_VECTOR_DELTAS) -> int:
+    """Merge the newest vector-index deltas until `keep` are left; returns how many were merged."""
+    if VECTOR_INDEX not in {i.name for i in table.list_indices()}:
+        return 0
+    n = table.index_stats(VECTOR_INDEX).num_indices
+    if n <= keep:
+        return 0
+    merge = n - keep + 1  # the newest `merge` deltas become one
+    start = time.monotonic()
+    table.to_lance().optimize.optimize_indices(index_names=[VECTOR_INDEX], num_indices_to_merge=merge)
+    table.checkout_latest()
+    log.info("merged %d of %d vector index deltas in %.0f s", merge, n, time.monotonic() - start)
+    return merge
 
 
 def _peak_rss_mb() -> float:

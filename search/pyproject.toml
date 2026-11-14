@@ -10,10 +10,11 @@ dependencies = [
     "bsky-embed",
     "bsky-enrich",
     "fastapi>=0.121.0",
-    "lancedb>=0.41.0",
+    "lancedb==0.41.0",
     "numpy>=2.5.4",
     "pyarrow>=22.0.0",
     "pyiceberg[glue,pyarrow]>=0.12.0",
+    "pylance==14.0.2",
     "python-dotenv>=1.2.4",
     "uvicorn>=0.38.0",
 ]

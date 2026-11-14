@@ -3,6 +3,7 @@ import datetime as dt
 import numpy as np
 import pyarrow as pa
 import pytest
+from lancedb.index import IvfPq
 from conftest import add_embeddings, vector
 
 from bsky_embed import spec
@@ -169,3 +170,25 @@ def test_superseded_drops_by_uri_hash_and_handles_no_deletes():
     assert s.drop(rows)["uri"].to_pylist() == ["at://a/1"]  # a/2 deleted, a/3 has a newer edit
     none = index.Superseded(np.empty(0, np.uint64), {})
     assert none.drop(rows).num_rows == 3
+
+
+def test_merge_vector_deltas_keeps_the_base_and_one_delta(db):
+    rng = np.random.default_rng(0)
+
+    def batch(start, n):
+        v = rng.standard_normal((n, 16)).astype(np.float32)
+        return pa.table({"id": pa.array(range(start, start + n)),
+                         "vector": pa.FixedSizeListArray.from_arrays(pa.array(v.reshape(-1)), 16)})
+
+    table = db.create_table("t", batch(0, 512))
+    table.create_index("vector", config=IvfPq(distance_type="cosine", num_partitions=4, num_sub_vectors=4))
+    assert index.merge_vector_deltas(table) == 0  # base only
+    for i in range(4):
+        table.add(batch(512 + 64 * i, 64))
+        table.optimize()  # adds a delta (the first after a fresh index may fold into it)
+    n = table.index_stats(index.VECTOR_INDEX).num_indices
+    assert n > index.MAX_VECTOR_DELTAS
+    assert index.merge_vector_deltas(table) == n - 1
+    stats = table.index_stats(index.VECTOR_INDEX)
+    assert (stats.num_indices, stats.num_indexed_rows, stats.num_unindexed_rows) == (2, 768, 0)
+    assert len(table.search(batch(0, 1)["vector"][0].as_py()).limit(5).to_list()) == 5

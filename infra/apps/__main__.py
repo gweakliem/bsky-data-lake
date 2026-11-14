@@ -471,7 +471,9 @@ search = k8s.apps.v1.Deployment(
         replicas=search_replicas,
         selector=k8s.meta.v1.LabelSelectorArgs(match_labels=search_labels),
         template=k8s.core.v1.PodTemplateSpecArgs(
-            metadata=k8s.meta.v1.ObjectMetaArgs(labels=search_labels),
+            # One replica with an in-memory index cache: a consolidation eviction is an outage and a cold cache.
+            metadata=k8s.meta.v1.ObjectMetaArgs(labels=search_labels,
+                                                annotations={"karpenter.sh/do-not-disrupt": "true"}),
             spec=k8s.core.v1.PodSpecArgs(
                 service_account_name=search_sa.metadata.name,
                 security_context=pod_security,

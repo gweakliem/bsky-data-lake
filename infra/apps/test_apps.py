@@ -295,6 +295,7 @@ def test_search_api_starts_at_zero_replicas_with_its_key_from_a_secret():
     def check(args):
         spec, service = args
         assert spec["replicas"] == 0
+        assert spec["template"]["metadata"]["annotations"]["karpenter.sh/do-not-disrupt"] == "true"
         pod = spec["template"]["spec"]
         assert pod["service_account_name"] == "search"
         (container,) = pod["containers"]

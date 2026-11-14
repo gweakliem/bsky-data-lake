@@ -340,6 +340,20 @@ Prerequisite for unattended running and for D4.
   - Optionally have Jev rerank the top 50 (a follow-up, behind a flag).
 - **Interface:** a small HTTP service (FastAPI) plus a CLI. A UI is out of scope.
 - **Deletes:** each index update removes `uri`s that appear in `deletes` since the last build.
+- **Query latency (profiled 2026-11-14, 41M rows):**
+  - **Cause:** production vector queries took 11–33 s because each hourly `table.optimize()` adds a new vector-index delta rather than merging. Twenty deltas after the reindex, at 385 probes each, meant 7,700 partition loads, 250 MB and 14k S3 requests per query, with the index cache almost never hit.
+  - **Merged into one delta** (on a shallow clone), the same queries took 1.7–2.0 s warm and 11–25 s cold, with every partition cached. Keyword search: 0.2–0.4 s warm.
+  - The query embedding (OpenRouter) took 0.5–3.3 s, and re-ranking on full vectors about 0.5 s.
+  - **Merging deltas (done 2026-11-14, image `e3-20261114`):** the index job keeps two (`merge_vector_deltas`: the trained base plus one rolling delta), through pylance, since lancedb's `optimize()` can't merge.
+    - Merge time tracks the partitions read, one S3 request each, not the rows: about 5,240 partitions per delta at 42M rows. The one-off catch-up of 23 of 24 deltas took 3,300 s at a 613 MB peak (index job's pod, CronJob suspended). The first hourly merge (2 of 3 deltas) took 298 s.
+    - That run carried two hours of posts (266k rows) and took 1,741 s, peaking at 9.9 GB against the 12 Gi limit. Watch `peak_rss_mb`.
+    - After the merge, in one process, a production vector query took 11–26 s the first time (partitions loading from S3) and 2.3 s repeated, with all 776 partition loads (2 deltas × 388 probes) from the cache.
+  - **Follow-ups:**
+    1. ~~Keep the delta count low in the index job.~~ Done, above.
+    2. Retune `PROBE_SHARE` (385 probes at 41M rows) for recall against latency, once the index has one or two deltas. At 20 probes a merged index answers in 0.6–0.9 s with re-ranking.
+    3. In the API, run LanceDB's blocking calls with `asyncio.to_thread`, and overlap hybrid's embedding with its keyword search. Today a query blocks the event loop, so `/healthz` times out (readiness probe failures) and concurrent queries queue behind each other.
+    4. **Prewarm the vector index at API startup** (`prewarm_index`; about 2.7 GB of PQ codes at 42M rows, within the 8 Gi pod). Until a partition is cached, the first query that needs it reads it from S3, so a new pod is slow for a long time.
+    5. **Erratic latency through the API:** after the merge, repeats of the same query through the API took 3–120 s, while the same queries in a separate process took 2.3 s. Suspects: the per-minute reopen (`read_consistency_interval`) and follow-up 3. Measure after 3 and 4.
 - **Acceptance:**
   - On the E1 query set, hybrid search matches or beats vector-only search.
   - A post deleted in silver disappears from results after the next index update.

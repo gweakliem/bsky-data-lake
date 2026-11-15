@@ -10,6 +10,8 @@ export default {
   pages: [
     {name: "Pipeline health", path: "/"},
     {name: "Activity", path: "/activity"},
-    {name: "Languages", path: "/languages"}
+    {name: "Languages", path: "/languages"},
+    {name: "Stories", path: "/stories"},
+    {name: "Communities", path: "/communities"}
   ]
 };

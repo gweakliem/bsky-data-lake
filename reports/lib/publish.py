@@ -13,6 +13,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import mimetypes
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -68,6 +69,8 @@ def publish(s3, url: str, dist: Path, now: dt.datetime | None = None) -> str:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     url = sys.argv[1]
+    # The Stories and Communities loaders read the clustering snapshot from <url>/inputs/cluster (cluster.py).
+    os.environ["BSKY_REPORTS_SITE_URL"] = url
     # check=True: a failed loader fails the build, and nothing is published.
     subprocess.run(["npm", "run", "build"], cwd=ROOT, check=True)
     import boto3

@@ -31,7 +31,7 @@ import pyarrow.parquet as pq
 from bsky_cluster import filters
 from bsky_cluster.fetch import DATA
 
-SAME_TOPIC, SAME_TIME = 0.85, 0.3
+SAME_TOPIC, SAME_TIME = 0.82, 0.5  # 2026-11-13: planes/airports joins the FAA story at 0.85 topic, 0.99 time
 SHARED_LINKS, SHARED_TOPIC = 3, 0.80
 OPPOSITE_TIME = -0.4
 EVENTFUL_GROWTH, EVENTFUL_BURST, EVENTFUL_SIZE = 1.5, 2.0, 200

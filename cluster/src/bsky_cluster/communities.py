@@ -4,7 +4,8 @@
 
 Reads data/cluster/likes-<day>.parquet and texts-<day>.parquet (fetch.py). Writes
 data/cluster/communities-<start>_<end>.parquet (did, community), the 64-d account and
-post embeddings (.npy with their id lists) and communities-<start>_<end>.md.
+post embeddings (.npy with their id lists), communities-<start>_<end>.md and .json
+(every community's words, size, languages, adult flag and example posts).
 
 The matrix is accounts x posts (an account liked a post), keeping accounts with at
 least --min-account likes and posts with at least --min-post. Columns are weighted
@@ -18,6 +19,7 @@ from __future__ import annotations
 import argparse
 import collections
 import datetime as dt
+import json
 import logging
 import time
 
@@ -141,7 +143,15 @@ def report(start, end, m, community, k, posts, post_likes, seconds, mode="exclud
              "their author or by Bluesky moderation, or by an adult account): "
              f"{flagged.sum()} of {k}. This report {'leaves them out' if mode == 'exclude' else 'shows only them' if mode == 'only' else 'shows all, marked [adult]'}; "
              "ranks are by size among all communities.", ""]
+    records = []
     for rank, c in enumerate(np.argsort(-sizes), 1):
+        lc = collections.Counter(l for r in meta[c] if r for l in (r.get("langs") or ["?"]))
+        n = sum(lc.values()) or 1
+        records.append({"id": int(c), "rank": rank, "accounts": int(sizes[c]), "words": list(words[c]),
+                        "adult": bool(flagged[c]), "adult_share": round(float(adult[c]), 3),
+                        "languages": [[l, round(v / n, 3)] for l, v in lc.most_common(4)],
+                        "examples": [{"text": r["text"][:300], "url": bsky_url(posts[j].as_py())}
+                                     for j, r in list(zip(want[c], meta[c]))[:6] if r and r.get("text")][:4]})
         if not shown[c]:
             continue
         lc = collections.Counter(l for r in meta[c] if r for l in (r.get("langs") or ["?"]))
@@ -155,6 +165,9 @@ def report(start, end, m, community, k, posts, post_likes, seconds, mode="exclud
             if r and r.get("text"):
                 lines.append(f"  - {r['text'][:160].replace(chr(10), ' / ')!r} ({bsky_url(posts[j].as_py())})")
         lines.append("")
+    (DATA / f"communities-{start}_{end}.json").write_text(json.dumps(
+        {"start": str(start), "end": str(end), "accounts": int(na), "posts": int(m.shape[1]), "likes": int(m.nnz),
+         "communities": records}, ensure_ascii=False))
     out = DATA / f"communities-{start}_{end}{filters.suffix(mode)}.md"
     out.write_text("\n".join(lines))
     log.info("report: %s", out)

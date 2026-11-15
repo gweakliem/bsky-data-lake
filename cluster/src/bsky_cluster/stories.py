@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import collections
 import datetime as dt
+import json
 import logging
 import re
 import time
@@ -278,6 +279,38 @@ def report(day, posts, texts, gid, first, sim, post_story, k, yday_count, n_yday
 
     stories = [g for g in np.argsort(-score) if score[g] > 0][:top_stories]
     topics = list(np.argsort(-gsize)[:top_topics])
+
+    def examples(g, most=6):
+        cs = sorted(gm[g], key=lambda c: -size[c])
+        per = max(1, most // len(cs))
+        out = []
+        for c in cs[:most]:
+            for gg in sorted(np.unique(gid[members[c]]), key=lambda gg: -sim[gg])[:per]:
+                i = first[gg]
+                out.append({"text": texts[i][:300], "url": bsky_url(uris[i]), "lang": langs[i]})
+        return out[:most]
+
+    def summary(g, rank=None):
+        idx = gposts[g]
+        lc = collections.Counter(langs[i] for i in idx)
+        dc = collections.Counter(d for i in idx if (d := domain(urls[i])))
+        tc = collections.Counter(titles[i] for i in idx if titles[i])
+        cs = sorted(gm[g], key=lambda c: -size[c])
+        return {"id": int(g), "rank": rank, "words": list(gwords[g]), "posts": int(gsize[g]),
+                "authors": len({dids[i] for i in idx}), "excess": round(float(max(excess[g], 0))),
+                "growth": round(float(ggrowth[g]), 2), "burst": round(float(gbursts[g][0]), 2),
+                "burst_hour": int(gbursts[g][1]), "hourly": [int(x) for x in hourly[cs].sum(axis=0)],
+                "languages": [[l, round(v / len(idx), 3)] for l, v in lc.most_common(5)],
+                "domains": [[d, v] for d, v in dc.most_common(5)],
+                "titles": [[t[:120], v] for t, v in tc.most_common(3)],
+                "clusters": [{"lang": dom[c], "posts": int(size[c]), "words": list(words[c][:4])} for c in cs],
+                "examples": examples(g)}
+
+    (DATA / f"stories-{name}.json").write_text(json.dumps({
+        "day": str(day), "adult": mode, "embedded_posts": total, "left_out": dropped, "clustered_posts": n,
+        "clusters": int(k), "assigned": round(float((post_story >= 0).mean()), 3),
+        "stories": [summary(g, r) for r, g in enumerate(stories, 1)],
+        "topics": [summary(g) for g in topics if g not in set(stories)]}, ensure_ascii=False))
     lines = [f"# Stories, {day}" + ("" if mode == "exclude" else f" (adult: {mode})"), "",
              f"{total:,} embedded posts; left out {', '.join(f'{v:,} {k_}' for k_, v in dropped.items())}; "
              f"{n:,} clustered into {k} clusters, {100 * (post_story >= 0).mean():.0f}% assigned; "

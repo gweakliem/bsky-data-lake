@@ -26,3 +26,8 @@ build-backend = "uv_build"
 [tool.uv.sources]
 bsky-embed = { path = "../embed", editable = true }
 bsky-enrich = { path = "../enrich", editable = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]

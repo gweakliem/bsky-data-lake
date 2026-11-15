@@ -291,6 +291,10 @@ def test_table_optimizers_for_silver_tables():
     assert len(tables) == 11
     # Every table gets all three optimizers.
     assert len(silver) == 3 * len(tables)
+    # Silver's day partitions wait for more files than raw's hour partitions.
+    mins = {o["configuration"]["compactionConfiguration"]["icebergConfiguration"]["minInputFiles"]
+            for o in silver if o["type"] == "compaction"}
+    assert mins == {40}
 
 
 def test_raw_files_expire_after_a_week():

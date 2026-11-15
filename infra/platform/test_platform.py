@@ -123,6 +123,14 @@ def test_cluster_api_access():
 
 
 @pulumi.runtime.test
+def test_control_plane_logs_off_by_default():
+    def check(types):
+        assert not types  # api + audit cost ~$26/mo; clusterLogTypes turns them back on
+
+    return platform.cluster.enabled_cluster_log_types.apply(check)
+
+
+@pulumi.runtime.test
 def test_cluster_auto_mode():
     def check(args):
         compute, bootstrap_addons, access, node_role_arn = args

@@ -867,7 +867,16 @@ if manage_iam:
         "table-optimizer", role=optimizer_role.name, policy_arn=optimizer_policy.arn
     )
 
-    def _optimizer_configs(role_arn: pulumi.Output[str]) -> dict[str, aws.glue.CatalogTableOptimizerConfigurationArgs]:
+    # Compaction starts once a partition has this many files, and every run is
+    # billed as a 2-DPU job however little it compacts. Raw's hour partitions get
+    # ~11 files; silver's day partitions ~96 (one per 15-minute run), so silver
+    # waits for more files: 10 meant ~8 runs a table a day, ~$50/mo across them.
+    raw_min_input_files = config.get_int("compactionMinInputFiles") or 10
+    silver_min_input_files = config.get_int("silverCompactionMinInputFiles") or 40
+
+    def _optimizer_configs(
+        role_arn: pulumi.Output[str], min_input_files: int
+    ) -> dict[str, aws.glue.CatalogTableOptimizerConfigurationArgs]:
         return {
             "compaction": aws.glue.CatalogTableOptimizerConfigurationArgs(
                 role_arn=role_arn,
@@ -875,9 +884,8 @@ if manage_iam:
                 compaction_configuration=aws.glue.CatalogTableOptimizerConfigurationCompactionConfigurationArgs(
                     iceberg_configuration=aws.glue.CatalogTableOptimizerConfigurationCompactionConfigurationIcebergConfigurationArgs(
                         strategy="binpack",
-                        # The default of 100 never triggers: an hour partition
-                        # gets ~17 files of ~16 MB.
-                        min_input_files=config.get_int("compactionMinInputFiles") or 10,
+                        # The default of 100 never triggers for a raw hour partition.
+                        min_input_files=min_input_files,
                     )
                 ),
             ),
@@ -916,12 +924,12 @@ if manage_iam:
             configuration=configuration,
             opts=pulumi.ResourceOptions(depends_on=[optimizer_attachment, *optimizer_log_groups.values()]),
         )
-        for db, prefix, tables in [
-            (database, "", optimized_tables),
-            (silver_database, "silver-", optimized_silver_tables),
+        for db, prefix, tables, min_input_files in [
+            (database, "", optimized_tables, raw_min_input_files),
+            (silver_database, "silver-", optimized_silver_tables, silver_min_input_files),
         ]
         for table in tables
-        for kind, configuration in _optimizer_configs(optimizer_role.arn).items()
+        for kind, configuration in _optimizer_configs(optimizer_role.arn, min_input_files).items()
     }
 
 # --- Alerts: pipeline alarms and a cost budget, by email ---

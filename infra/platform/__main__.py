@@ -190,7 +190,9 @@ cluster = aws.eks.Cluster(
         endpoint_public_access=True,
         public_access_cidrs=public_access_cidrs,
     ),
-    enabled_cluster_log_types=["api", "audit"],
+    # api + audit sent ~1.8 GB/day to CloudWatch (~$26/mo, 2026-11). Off by
+    # default; set clusterLogTypes (e.g. ["audit"]) to look into something.
+    enabled_cluster_log_types=config.get_object("clusterLogTypes") or [],
     opts=pulumi.ResourceOptions(depends_on=[control_plane_logs, *cluster_attachments, *node_attachments]),
 )
 

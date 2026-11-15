@@ -3,7 +3,7 @@ config:
   bsky-apps:loaderImageTag: "03cb7e6"
   bsky-apps:ingestImageTag: a287294
   bsky-apps:silverImageTag: 36b7137
-  bsky-apps:reportsImageTag: 0eb411f
+  bsky-apps:reportsImageTag: b9e249c
   bsky-apps:embedImageTag: 04481b5
   bsky-apps:embedSuspend: "false"
   bsky-apps:searchImageTag: e3-20261114

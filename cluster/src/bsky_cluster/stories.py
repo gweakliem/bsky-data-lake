@@ -3,7 +3,8 @@
     uv run python -m bsky_cluster.stories 2026-11-13 [--sample 250000] [--min-cluster 60]
 
 Reads data/cluster/posts-<day>.parquet, sample-<day - 1>.parquet, labels-*/authors-*
-(fetch.py). Writes data/cluster/stories-<day>.parquet (uri, story) and stories-<day>.md.
+(fetch.py). Writes data/cluster/stories-<day>.parquet (uri, cluster, story), stories-<day>.md and
+clusters-<day>.npz/.parquet (per-cluster centroids, timing, words; merge.py reads them).
 
 Pipeline:
 - Leave out replies (without their parent they cluster by tone: "yes, exactly"),
@@ -12,9 +13,12 @@ Pipeline:
 - Collapse near-identical texts (weighted by how many posts share them),
   PCA 1024 -> 64, UMAP 64 -> 8 on a sample, HDBSCAN on that, then every text group
   goes to its nearest centroid in PCA space (or to none).
-- Rank: a story is new or bursty. growth = share of today's posts / share of a 10%
-  sample of yesterday's (placed on today's centroids); burst = share of the
-  cluster's posts in its busiest 3 hours, over the 1/8 an even spread would give.
+- Merge clusters that are one story (merge.py): same topic in the full embedding
+  space, across languages, unless their timing is opposite.
+- Rank stories by posts above yesterday's rate, size x (1 - 1/growth): growth =
+  share of today's posts / share of a 10% sample of yesterday's (placed on today's
+  centroids), at least 1.5x. Also reported: burst = share of the story's posts
+  in its busiest 3 hours over its language's share in those hours.
 """
 
 from __future__ import annotations
@@ -34,7 +38,7 @@ import pyarrow.parquet as pq
 from sklearn.cluster import HDBSCAN
 from sklearn.decomposition import PCA
 
-from bsky_cluster import filters
+from bsky_cluster import filters, merge
 from bsky_cluster.fetch import DATA
 from bsky_cluster.labels import background_sample, label_words, lang_of
 from bsky_embed import spec
@@ -134,7 +138,6 @@ def run(day: dt.date, sample: int, min_cluster: int, seed: int = 0) -> None:
 
     group_of = {}
     gid = np.fromiter((group_of.setdefault(k, len(group_of)) for k in keys), dtype=np.int64, count=n)
-    weight = np.bincount(gid)
     first = np.full(len(group_of), -1, dtype=np.int64)
     first[gid[::-1]] = np.arange(n - 1, -1, -1)
     g = len(group_of)
@@ -171,23 +174,34 @@ def run(day: dt.date, sample: int, min_cluster: int, seed: int = 0) -> None:
     yday = day - dt.timedelta(days=1)
     ys, _ = leave_out(pq.read_table(DATA / f"sample-{yday}.parquet"), yday, adult_uris, adult_dids)
     ystory, _ = placed(project(vectors(ys["vector"])), cent, floor)
-    today_share = np.bincount(post_story[post_story >= 0], minlength=k) / n
-    yday_share = np.bincount(ystory[ystory >= 0], minlength=k) / max(len(ys), 1)
-    growth = (today_share + 2e-5) / (yday_share + 2e-5)
+    yday_count = np.bincount(ystory[ystory >= 0], minlength=k)
 
-    pq.write_table(pa.table({"uri": posts["uri"], "story": pa.array(post_story)}), DATA / f"stories-{day}.parquet")
-    report(day, posts, texts, gid, first, weight, sim, post_story, k, growth, total, dropped, time.monotonic() - t0)
-
-
-def burst(hours_us: np.ndarray) -> tuple[float, int]:
-    """Share of posts in the busiest 3 hours (as a multiple of an even spread's 1/8), and its first hour."""
-    h = np.bincount(hours_us, minlength=24)
-    win = h + np.roll(h, -1) + np.roll(h, -2)
-    i = int(win.argmax())
-    return win[i] / max(h.sum(), 1) * 8, i
+    full = full_centroids(vec, post_story, k)
+    report(day, posts, texts, gid, first, sim, post_story, k, yday_count, len(ys), full, total, dropped,
+           time.monotonic() - t0)
 
 
-def report(day, posts, texts, gid, first, weight, sim, post_story, k, growth, total, dropped, seconds,
+def full_centroids(vec: np.ndarray, post_story: np.ndarray, k: int) -> np.ndarray:
+    """Each cluster's mean in the full embedding space, where the model aligns languages."""
+    out = np.zeros((k, vec.shape[1]), dtype=np.float32)
+    order = np.argsort(post_story, kind="stable")
+    bounds = np.searchsorted(post_story[order], np.arange(k + 1))
+    for c in range(k):
+        idx = order[bounds[c]:bounds[c + 1]]
+        for s in range(0, len(idx), 50_000):
+            out[c] += vec[idx[s:s + 50_000]].astype(np.float32).sum(axis=0)
+    return normalize(out)
+
+
+BASELINE_MIN = 20_000  # posts a language needs for its own hourly baseline; others use everyone's
+
+
+def growth_of(today: np.ndarray, yday: np.ndarray, n: int, n_yday: int) -> np.ndarray:
+    """Share of today's posts over share of yesterday's sample (smoothed so tiny clusters don't explode)."""
+    return (today / n + 2e-5) / (yday / max(n_yday, 1) + 2e-5)
+
+
+def report(day, posts, texts, gid, first, sim, post_story, k, yday_count, n_yday, full, total, dropped, seconds,
            top_stories=30, top_topics=15) -> None:
     langs = [lang_of(x) for x in posts["langs"].to_pylist()]
     urls = posts["external_uri"].to_pylist()
@@ -195,59 +209,105 @@ def report(day, posts, texts, gid, first, weight, sim, post_story, k, growth, to
     dids = posts["did"].to_pylist()
     uris = posts["uri"].to_pylist()
     hours = pc.hour(posts["created_at"]).to_numpy(zero_copy_only=False)
-    members = collections.defaultdict(list)
-    for i, s in enumerate(post_story):
-        if s >= 0:
-            members[s].append(i)
-    size = np.array([len(members[c]) for c in range(k)])
-    bursts = [burst(hours[members[c]]) if members[c] else (0.0, 0) for c in range(k)]
-    score = np.where(size >= 500, growth * np.array([b for b, _ in bursts]), 0)
+    n = len(posts)
+    order = np.argsort(post_story, kind="stable")
+    bounds = np.searchsorted(post_story[order], np.arange(k + 1))
+    members = [order[bounds[c]:bounds[c + 1]] for c in range(k)]
+    size = np.array([len(m) for m in members])
+    dom = [collections.Counter(langs[i] for i in m).most_common(1)[0][0] if len(m) else "?" for m in members]
+
+    # Timing is judged against each language's own day: Japanese posts peak in Japanese daytime.
+    lang_arr = np.array(langs)
+    every = np.bincount(hours, minlength=24) / n
+    by_lang = {l: np.bincount(hours[lang_arr == l], minlength=24) / cnt
+               for l, cnt in collections.Counter(langs).items() if cnt >= BASELINE_MIN}
+    baseline = np.stack([by_lang.get(dom[c], every) for c in range(k)])
+    hourly = np.stack([np.bincount(hours[m], minlength=24) for m in members])
+    growth = growth_of(size, yday_count, n, n_yday)
+    burst = np.array([merge.relative_burst(hourly[c], baseline[c])[0] for c in range(k)])
+    links = [{u for i in m if (u := urls[i]) and domain(u)} for m in members]
+    group = merge.groups(full, hourly, baseline, links, merge.eventful(size, growth, burst))
+
+    ng = group.max() + 1
+    gm = [np.flatnonzero(group == g) for g in range(ng)]
+    gposts = [np.concatenate([members[c] for c in cs]) for cs in gm]
+    gsize = np.array([len(p) for p in gposts])
+    ggrowth = growth_of(gsize, np.array([yday_count[cs].sum() for cs in gm]), n, n_yday)
+    gbursts = [merge.relative_burst(hourly[cs].sum(axis=0),
+                                    (baseline[cs] * size[cs, None]).sum(axis=0) / max(size[cs].sum(), 1))
+               for cs in gm]
+    # Rank by excess: posts above yesterday's rate. A rate (growth x burst) favours small sharp clusters
+    # and penalises merging a story with its chatter; excess counts how much more was said about it.
+    excess = gsize * (1 - 1 / ggrowth)
+    score = np.where((gsize >= 500) & (ggrowth >= merge.EVENTFUL_GROWTH), excess, 0)
 
     rng = np.random.default_rng(0)
-    docs, dom = [], []
-    for c in range(k):
-        idx = members[c]
-        pick = rng.choice(idx, size=min(len(idx), 3000), replace=False) if idx else []
-        docs.append([texts[i] for i in pick])
-        dom.append(collections.Counter(langs[i] for i in idx).most_common(1)[0][0] if idx else "?")
-    words = label_words(docs, dom, background_sample(texts, langs))
 
-    def line(c):
-        return (f"{', '.join(words[c][:6]) or '(no words)'} | {size[c]:,} posts | growth {growth[c]:.1f}x | "
-                f"burst {bursts[c][0]:.1f}x from {bursts[c][1]:02d}Z")
+    def sample_docs(idx):
+        return [texts[i] for i in (rng.choice(idx, size=min(len(idx), 3000), replace=False) if len(idx) else [])]
 
-    stories = [c for c in np.argsort(-score) if score[c] > 0][:top_stories]
-    topics = list(np.argsort(-size)[:top_topics])
+    def dominant(idx):
+        return collections.Counter(langs[i] for i in idx).most_common(1)[0][0] if len(idx) else "?"
+
+    multi = [g for g in range(ng) if len(gm[g]) > 1]
+    every_words = label_words([sample_docs(m) for m in members] + [sample_docs(gposts[g]) for g in multi],
+                              dom + [dominant(gposts[g]) for g in multi], background_sample(texts, langs))
+    words = every_words[:k]
+    gwords = [words[cs[0]] for cs in gm]
+    for g, w in zip(multi, every_words[k:]):
+        gwords[g] = w
+
+    np.savez(DATA / f"clusters-{day}.npz", centroid=full, hourly=hourly, baseline=baseline, size=size,
+             growth=growth, burst=burst, lang=np.array(dom), group=group)
+    pq.write_table(pa.table({"cluster": pa.array(range(k)), "words": pa.array(words),
+                             "links": pa.array([sorted(x) for x in links])}), DATA / f"clusters-{day}.parquet")
+    pq.write_table(pa.table({"uri": posts["uri"], "cluster": pa.array(post_story),
+                             "story": pa.array(np.where(post_story >= 0, group[post_story.clip(0)], -1))}),
+                   DATA / f"stories-{day}.parquet")
+
+    def line(g):
+        parts = f" in {len(gm[g])} clusters" if len(gm[g]) > 1 else ""
+        b, h = gbursts[g]
+        return (f"{', '.join(gwords[g][:6]) or '(no words)'} | {gsize[g]:,} posts{parts}, "
+                f"{max(excess[g], 0):,.0f} above yesterday's rate | growth {ggrowth[g]:.1f}x | burst {b:.1f}x from {h:02d}Z")
+
+    stories = [g for g in np.argsort(-score) if score[g] > 0][:top_stories]
+    topics = list(np.argsort(-gsize)[:top_topics])
     lines = [f"# Stories, {day}", "",
              f"{total:,} embedded posts; left out {', '.join(f'{v:,} {k_}' for k_, v in dropped.items())}; "
-             f"{len(posts):,} clustered into {k} clusters, {100 * (post_story >= 0).mean():.0f}% assigned; "
-             f"{seconds / 60:.0f} min.", "",
-             "Ranked by growth (share of today's posts over yesterday's) x burst (busiest 3 hours over an even "
-             "spread), clusters of 500+ posts.", "", "## Stories", ""]
-    lines += [f"{r}. {line(c)}" for r, c in enumerate(stories, 1)]
-    lines += ["", "## Largest clusters (standing topics)", ""]
-    lines += [f"- {line(c)}" for c in topics]
+             f"{n:,} clustered into {k} clusters, {100 * (post_story >= 0).mean():.0f}% assigned; "
+             f"{len(multi)} stories merged from {sum(len(gm[g]) for g in multi)} clusters; {seconds / 60:.0f} min.", "",
+             "Ranked by posts above yesterday's rate: size x (1 - 1/growth), where growth is the story's share of "
+             "today's posts over its share of yesterday's; stories of 500+ posts growing 1.5x+. Burst is the share of posts in "
+             "the busiest 3 hours over the language's share in those hours.", "", "## Stories", ""]
+    lines += [f"{r}. {line(g)}" for r, g in enumerate(stories, 1)]
+    lines += ["", "## Largest (standing topics)", ""]
+    lines += [f"- {line(g)}" for g in topics]
     lines += ["", "## Story details", ""]
-    for r, c in enumerate(stories, 1):
-        idx = members[c]
+    for r, g in enumerate(stories, 1):
+        idx = gposts[g]
         lc = collections.Counter(langs[i] for i in idx)
         dc = collections.Counter(d for i in idx if (d := domain(urls[i])))
         tc = collections.Counter(titles[i] for i in idx if titles[i])
-        groups = np.unique(gid[idx])
-        best = sorted(groups, key=lambda gg: -sim[gg])[:5]
-        lines += [f"### {r}. {', '.join(words[c][:6])}", "",
-                  f"- {size[c]:,} posts, {len(groups):,} distinct texts, {len({dids[i] for i in idx}):,} authors; "
-                  f"growth {growth[c]:.1f}x, burst {bursts[c][0]:.1f}x from {bursts[c][1]:02d}Z",
+        lines += [f"### {r}. {', '.join(gwords[g][:6])}", "",
+                  f"- {gsize[g]:,} posts, {len(np.unique(gid[idx])):,} distinct texts, "
+                  f"{len({dids[i] for i in idx}):,} authors; growth {ggrowth[g]:.1f}x, "
+                  f"burst {gbursts[g][0]:.1f}x from {gbursts[g][1]:02d}Z",
                   f"- languages: {', '.join(f'{l} {100 * v / len(idx):.0f}%' for l, v in lc.most_common(5))}",
-                  f"- words: {', '.join(words[c])}"]
+                  f"- words: {', '.join(gwords[g])}"]
         if dc:
             lines.append(f"- link domains: {', '.join(f'{d} ({v})' for d, v in dc.most_common(5))}")
         if tc:
             lines.append(f"- top link titles: {' | '.join(f'{t[:80]} ({v})' for t, v in tc.most_common(3))}")
+        cs = sorted(gm[g], key=lambda c: -size[c])
+        if len(cs) > 1:
+            lines.append("- clusters: " + "; ".join(f"{dom[c]} {size[c]:,} ({', '.join(words[c][:4])})" for c in cs))
         lines.append("- nearest the centre:")
-        for gg in best:
-            i = first[gg]
-            lines.append(f"  - {texts[i][:200].replace(chr(10), ' / ')!r} ({bsky_url(uris[i])})")
+        per = max(1, 6 // len(cs))
+        for c in cs[:6]:
+            for gg in sorted(np.unique(gid[members[c]]), key=lambda gg: -sim[gg])[:per]:
+                i = first[gg]
+                lines.append(f"  - {texts[i][:200].replace(chr(10), ' / ')!r} ({bsky_url(uris[i])})")
         lines.append("")
     out = DATA / f"stories-{day}.md"
     out.write_text("\n".join(lines))

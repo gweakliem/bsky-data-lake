@@ -13,6 +13,7 @@ SILVER_REPO_URL = "123456789012.dkr.ecr.us-west-2.amazonaws.com/bsky/silver"
 REPORTS_REPO_URL = "123456789012.dkr.ecr.us-west-2.amazonaws.com/bsky/reports"
 EMBED_REPO_URL = "123456789012.dkr.ecr.us-west-2.amazonaws.com/bsky/embed"
 SEARCH_REPO_URL = "123456789012.dkr.ecr.us-west-2.amazonaws.com/bsky/search"
+LABELS_REPO_URL = "123456789012.dkr.ecr.us-west-2.amazonaws.com/bsky/labels"
 STACK_OUTPUTS = {
     "kubeconfig": "{}",
     "namespace": "bsky",
@@ -23,6 +24,7 @@ STACK_OUTPUTS = {
         "reports": REPORTS_REPO_URL,
         "embed": EMBED_REPO_URL,
         "search": SEARCH_REPO_URL,
+        "labels": LABELS_REPO_URL,
     },
     "queue_url": "https://sqs.us-west-2.amazonaws.com/123456789012/bsky-raw-files",
     "raw_table_location": "s3://test-warehouse/iceberg/bsky_raw/jetstream",
@@ -53,6 +55,7 @@ pulumi.runtime.set_config("bsky-apps:silverImageTag", "fed4321")
 pulumi.runtime.set_config("bsky-apps:reportsImageTag", "ccc1111")
 pulumi.runtime.set_config("bsky-apps:embedImageTag", "eee2222")
 pulumi.runtime.set_config("bsky-apps:searchImageTag", "aaa3333")
+pulumi.runtime.set_config("bsky-apps:labelsImageTag", "bbb4444")
 _key_file = Path(tempfile.mkdtemp()) / "openrouter-key"
 _key_file.write_text("sk-or-test\n")
 os.environ["BSKY_OPENROUTER_KEY_FILE"] = str(_key_file)
@@ -165,6 +168,25 @@ def test_embed_cronjob_starts_suspended_and_reads_its_key_from_a_secret():
         assert container["resources"]["limits"]["memory"] == container["resources"]["requests"]["memory"]
 
     return pulumi.Output.all(apps.embed.spec, apps.embed_key.metadata.name).apply(check)
+
+
+@pulumi.runtime.test
+def test_labels_cronjob_is_daily_starts_suspended_and_needs_no_secrets():
+    def check(spec):
+        assert spec["schedule"] == "30 0 * * *"
+        assert spec["suspend"] is True  # until the backfill is loaded
+        assert spec["concurrency_policy"] == "Forbid"
+        job = spec["job_template"]["spec"]
+        assert job["template"]["metadata"]["annotations"]["karpenter.sh/do-not-disrupt"] == "true"
+        pod = job["template"]["spec"]
+        assert pod["service_account_name"] == "labels"
+        (container,) = pod["containers"]
+        assert container["image"] == f"{LABELS_REPO_URL}:bbb4444"
+        env = {e["name"]: e for e in container["env"]}
+        assert set(env) == {"BSKY_SILVER_LOCATION", "AWS_REGION"}  # the label stream is public
+        assert container["resources"]["limits"]["memory"] == container["resources"]["requests"]["memory"]
+
+    return apps.labels_job.spec.apply(check)
 
 
 @pulumi.runtime.test

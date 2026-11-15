@@ -17,6 +17,7 @@ REPORTS_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/bsky/bsky-reports"
 EMBED_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/bsky/bsky-embed"
 INDEX_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/bsky/bsky-index"
 SEARCH_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/bsky/bsky-search"
+LABELS_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/bsky/bsky-labels"
 CLOUDWATCH_AGENT_ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/bsky/bsky-cloudwatch-agent"
 BOUNDARY_ARN = f"arn:aws:iam::{ACCOUNT}:policy/bsky-workload-boundary"
 
@@ -40,6 +41,7 @@ class Mocks(pulumi.runtime.Mocks):
                     "embed_role_arn": EMBED_ROLE_ARN,
                     "index_role_arn": INDEX_ROLE_ARN,
                     "search_role_arn": SEARCH_ROLE_ARN,
+                    "labels_role_arn": LABELS_ROLE_ARN,
                     "cloudwatch_agent_role_arn": CLOUDWATCH_AGENT_ROLE_ARN,
                 }
             }
@@ -178,7 +180,7 @@ def test_ecr_scans_and_expires():
         assert [r["selection"]["tagStatus"] for r in rules] == ["untagged", "tagged"]
 
     repo = platform.repositories["iceberg-loader"]
-    assert sorted(platform.repositories) == ["embed", "iceberg-loader", "ingest", "reports", "search", "silver"]
+    assert sorted(platform.repositories) == ["embed", "iceberg-loader", "ingest", "labels", "reports", "search", "silver"]
     lifecycle = mocks.resources["aws:ecr/lifecyclePolicy:LifecyclePolicy"][0]
     return pulumi.Output.all(repo.image_scanning_configuration, lifecycle["policy"]).apply(check)
 
@@ -212,6 +214,17 @@ def test_embed_pod_identity_uses_data_stack_role():
         assert role_arn == EMBED_ROLE_ARN
 
     a = platform.pod_identities["embed"]
+    return pulumi.Output.all(a.namespace, a.service_account, a.role_arn).apply(check)
+
+
+@pulumi.runtime.test
+def test_labels_pod_identity_uses_data_stack_role():
+    def check(args):
+        namespace, service_account, role_arn = args
+        assert (namespace, service_account) == ("bsky", "labels")
+        assert role_arn == LABELS_ROLE_ARN
+
+    a = platform.pod_identities["labels"]
     return pulumi.Output.all(a.namespace, a.service_account, a.role_arn).apply(check)
 
 

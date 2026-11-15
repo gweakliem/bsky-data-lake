@@ -371,6 +371,74 @@ embed = k8s.batch.v1.CronJob(
     opts=opts,
 )
 
+# --- Moderation labels: daily, mod.bsky.app's new labels into moderation_labels (labels/) ---
+
+labels_labels = {"app.kubernetes.io/name": "labels", "app.kubernetes.io/part-of": "bsky-data-lake"}
+labels_image_tag = config.require("labelsImageTag")
+labels_image = repository_urls.apply(lambda urls: f"{urls['labels']}:{labels_image_tag}")
+# One commit's labels (100k rows) in memory at a time.
+labels_memory_limit = config.get("labelsMemoryLimit") or "1Gi"
+# Suspended until the backfill (43M labels, loaded from a laptop) is in: a first
+# run on an empty table would replay the whole history from the stream (~6 h).
+labels_suspend = config.get_bool("labelsSuspend", True)
+
+# The name must match the platform stack's Pod Identity association.
+labels_sa = k8s.core.v1.ServiceAccount(
+    "labels", metadata=k8s.meta.v1.ObjectMetaArgs(name="labels", namespace=ns), opts=opts
+)
+
+labels_job = k8s.batch.v1.CronJob(
+    "labels",
+    metadata=k8s.meta.v1.ObjectMetaArgs(name="labels", namespace=ns, labels=labels_labels),
+    spec=k8s.batch.v1.CronJobSpecArgs(
+        # Daily: about 55k labels, under a minute. Nothing reads them hourly.
+        schedule="30 0 * * *",
+        time_zone="Etc/UTC",
+        suspend=labels_suspend,
+        concurrency_policy="Forbid",
+        successful_jobs_history_limit=3,
+        failed_jobs_history_limit=3,
+        job_template=k8s.batch.v1.JobTemplateSpecArgs(
+            metadata=k8s.meta.v1.ObjectMetaArgs(labels=labels_labels),
+            spec=k8s.batch.v1.JobSpecArgs(
+                backoff_limit=2,
+                # Days of catching up take minutes (2,000 labels/s); a run cut short
+                # resumes from its last commit.
+                active_deadline_seconds=2 * 3600,
+                template=k8s.core.v1.PodTemplateSpecArgs(
+                    metadata=k8s.meta.v1.ObjectMetaArgs(
+                        labels=labels_labels,
+                        annotations={"karpenter.sh/do-not-disrupt": "true"},
+                    ),
+                    spec=k8s.core.v1.PodSpecArgs(
+                        service_account_name=labels_sa.metadata.name,
+                        restart_policy="Never",
+                        security_context=pod_security,
+                        containers=[
+                            k8s.core.v1.ContainerArgs(
+                                name="labels",
+                                image=labels_image,
+                                env=[
+                                    k8s.core.v1.EnvVarArgs(
+                                        name="BSKY_SILVER_LOCATION", value=data.require_output("silver_location")
+                                    ),
+                                    k8s.core.v1.EnvVarArgs(name="AWS_REGION", value=region),
+                                ],
+                                resources=k8s.core.v1.ResourceRequirementsArgs(
+                                    requests={"cpu": "100m", "memory": labels_memory_limit},
+                                    limits={"memory": labels_memory_limit},
+                                ),
+                                security_context=container_security,
+                            )
+                        ],
+                    ),
+                ),
+            ),
+        ),
+    ),
+    opts=opts,
+)
+
 # --- Search: the index job and the query API (search/, WP E3) ---
 # One image, bsky/search. The index CronJob is the Lance dataset's only writer;
 # the API opens it read-only and picks up new versions within a minute.

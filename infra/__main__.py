@@ -55,6 +55,8 @@ athena_results_retention_days = config.get_int("athenaResultsRetentionDays") or 
 embed_alarm_actions = config.get_bool("embedAlarmActions", False)
 # Likewise for the search index job (indexAlarmActions).
 index_alarm_actions = config.get_bool("indexAlarmActions", False)
+# And the moderation-labels job (labelsAlarmActions), suspended until its backfill is loaded.
+labels_alarm_actions = config.get_bool("labelsAlarmActions", False)
 # The EKS cluster (platform stack), for Container Insights' log group and alarms.
 cluster_name = config.get("clusterName") or "bsky"
 container_insights_retention_days = config.get_int("containerInsightsRetentionDays") or 14
@@ -557,6 +559,45 @@ embed_policy_document = pulumi.Output.all(account_id, region).apply(
     )
 )
 
+# --- IAM: the moderation-labels job writes only moderation_labels (labels/) ---
+# It reads nothing from the lake but its own table (its watermark is the table's
+# max seq); its input is mod.bsky.app's public label stream.
+
+LABELS_TABLE = "moderation_labels"
+
+labels_policy_document = pulumi.Output.all(account_id, region).apply(
+    lambda args: json.dumps(
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Sid": "ListTableFiles",
+                    "Effect": "Allow",
+                    "Action": "s3:ListBucket",
+                    "Resource": warehouse_bucket_arn,
+                    "Condition": {"StringLike": {"s3:prefix": [f"iceberg/{silver_database_name}/{LABELS_TABLE}/*"]}},
+                },
+                {
+                    "Sid": "WriteLabels",
+                    "Effect": "Allow",
+                    "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+                    "Resource": f"{warehouse_bucket_arn}/iceberg/{silver_database_name}/{LABELS_TABLE}/*",
+                },
+                {
+                    "Sid": "WriteLabelsCatalog",
+                    "Effect": "Allow",
+                    "Action": ["glue:GetDatabase", "glue:GetTable", "glue:CreateTable", "glue:UpdateTable"],
+                    "Resource": [
+                        f"arn:aws:glue:{args[1]}:{args[0]}:catalog",
+                        f"arn:aws:glue:{args[1]}:{args[0]}:database/{silver_database_name}",
+                        f"arn:aws:glue:{args[1]}:{args[0]}:table/{silver_database_name}/{LABELS_TABLE}",
+                    ],
+                },
+            ],
+        }
+    )
+)
+
 # --- IAM: the search index (WP E3) ---
 # A Lance dataset under lance/ in the warehouse bucket, outside Iceberg and Glue.
 # The index job reads post_embeddings and posts (with deletes and silver_runs)
@@ -747,6 +788,16 @@ if manage_iam:
     embed_role = _pod_role("embed", "bsky-embed", "EKS pod role for the embedding job")
     aws.iam.RolePolicyAttachment("embed", role=embed_role.name, policy_arn=embed_policy.arn)
     pulumi.export("embed_role_arn", embed_role.arn)
+
+    labels_policy = bsky_iam.policy(
+        "labels",
+        name="bsky-labels",
+        description="Write the moderation_labels table",
+        policy=labels_policy_document,
+    )
+    labels_role = _pod_role("labels", "bsky-labels", "EKS pod role for the moderation-labels job")
+    aws.iam.RolePolicyAttachment("labels", role=labels_role.name, policy_arn=labels_policy.arn)
+    pulumi.export("labels_role_arn", labels_role.arn)
 
     index_policy = bsky_iam.policy(
         "index",
@@ -1001,6 +1052,39 @@ embed_stalled = aws.cloudwatch.MetricAlarm(
     alarm_actions=[alerts.arn],
     ok_actions=[alerts.arn],
     opts=pulumi.ResourceOptions(depends_on=[embed_chunks]),
+)
+
+# The labels job logs one line per run ("bsky_labels.job: run {...}"), new labels
+# or not, and runs daily: two days without one means two runs failed, hung or
+# never started.
+labels_runs = aws.cloudwatch.LogMetricFilter(
+    "labels-runs",
+    name="bsky-labels-runs",
+    log_group_name=container_logs.name,
+    pattern='"bsky_labels.job: run"',
+    metric_transformation=aws.cloudwatch.LogMetricFilterMetricTransformationArgs(
+        namespace=SILVER_METRIC_NAMESPACE,
+        name="LabelsRuns",
+        value="1",
+        default_value="0",
+    ),
+)
+labels_stalled = aws.cloudwatch.MetricAlarm(
+    "labels-stalled",
+    name="bsky-labels-stalled",
+    alarm_description="No moderation-labels run finished in two days: runs are failing, hung or not starting",
+    namespace=SILVER_METRIC_NAMESPACE,
+    metric_name="LabelsRuns",
+    statistic="Sum",
+    period=86400,
+    evaluation_periods=2,
+    comparison_operator="LessThanThreshold",
+    threshold=1,
+    treat_missing_data="breaching",
+    actions_enabled=labels_alarm_actions,
+    alarm_actions=[alerts.arn],
+    ok_actions=[alerts.arn],
+    opts=pulumi.ResourceOptions(depends_on=[labels_runs]),
 )
 
 # The index job logs one line per finished run ("bsky_search.index: run {...}"),

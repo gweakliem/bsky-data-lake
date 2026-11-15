@@ -317,6 +317,7 @@ def test_pipeline_alarms_notify_the_alert_topic():
         alarms = {a["name"]: a for a in mocks.by_type["aws:cloudwatch/metricAlarm:MetricAlarm"]}
         assert sorted(alarms) == [
             "bsky-dead-letters", "bsky-embed-stalled", "bsky-index-stalled", "bsky-ingest-stalled", "bsky-job-failed",
+            "bsky-labels-stalled",
             "bsky-loader-behind", "bsky-pod-crash-looping", "bsky-pod-memory-high", "bsky-pod-oom-killed", "bsky-silver-stalled",
         ]
         for a in alarms.values():
@@ -338,6 +339,10 @@ def test_pipeline_alarms_notify_the_alert_topic():
         # Silent until its CronJob runs in the cluster (embedAlarmActions).
         assert alarms["bsky-embed-stalled"]["actionsEnabled"] is False
         assert alarms["bsky-index-stalled"]["actionsEnabled"] is False
+        # The labels job runs daily: a run line a day, two days' grace.
+        labels, f = alarms["bsky-labels-stalled"], filters["bsky-labels-runs"]
+        assert (labels["metricName"], f["metricTransformation"]["name"]) == ("LabelsRuns", "LabelsRuns")
+        assert (labels["period"], labels["evaluationPeriods"], labels["actionsEnabled"]) == (86400, 2, False)
         (sub,) = mocks.by_type["aws:sns/topicSubscription:TopicSubscription"]
         assert (sub["protocol"], sub["endpoint"]) == ("email", "alerts@example.com")
 
@@ -518,3 +523,19 @@ def test_job_failed_alarm_counts_failed_job_events():
     assert '$.involvedObject.kind = "Job"' in f["pattern"]
     assert "BackoffLimitExceeded" in f["pattern"] and "DeadlineExceeded" in f["pattern"]
     assert a["treatMissingData"] == "notBreaching" and a["threshold"] == 1
+
+
+@pulumi.runtime.test
+def test_labels_writes_only_its_table():
+    def check(args):
+        policy, arn = args
+        stmts = {s["Sid"]: s for s in json.loads(policy)["Statement"]}
+        silver = "arn:aws:s3:::test-warehouse/iceberg/bsky_silver"
+        assert stmts["WriteLabels"]["Resource"] == f"{silver}/moderation_labels/*"
+        tables = [r for r in stmts["WriteLabelsCatalog"]["Resource"] if ":table/" in r]
+        assert tables == ["arn:aws:glue:us-west-2:123456789012:table/bsky_silver/moderation_labels"]
+        # Nothing else in silver, bronze or the raw-file bucket.
+        assert "/posts/" not in policy and "bsky_raw" not in policy and "test-bucket" not in policy
+        assert arn == "arn:aws:iam::123456789012:role/bsky/bsky-labels"
+
+    return pulumi.Output.all(infra.labels_policy_document, infra.labels_role.arn).apply(check)

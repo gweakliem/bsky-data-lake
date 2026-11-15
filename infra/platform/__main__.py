@@ -223,7 +223,7 @@ ecr_lifecycle = json.dumps(
 )
 
 repositories = {}
-for image in ["iceberg-loader", "ingest", "silver", "reports", "embed", "search"]:
+for image in ["iceberg-loader", "ingest", "silver", "reports", "embed", "search", "labels"]:
     repo = aws.ecr.Repository(
         image,
         name=f"bsky/{image}",
@@ -270,6 +270,13 @@ pod_identities = {
         namespace=namespace,
         service_account="embed",
         role_arn=data.require_output("embed_role_arn"),
+    ),
+    "labels": aws.eks.PodIdentityAssociation(
+        "labels",
+        cluster_name=cluster.name,
+        namespace=namespace,
+        service_account="labels",
+        role_arn=data.require_output("labels_role_arn"),
     ),
     # One image (bsky/search) for both: the index CronJob writes, the API reads.
     "index": aws.eks.PodIdentityAssociation(

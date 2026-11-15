@@ -28,6 +28,7 @@ import datetime as dt
 import numpy as np
 import pyarrow.parquet as pq
 
+from bsky_cluster import filters
 from bsky_cluster.fetch import DATA
 
 SAME_TOPIC, SAME_TIME = 0.85, 0.3
@@ -90,9 +91,11 @@ def groups(centroid: np.ndarray, hourly: np.ndarray, baseline: np.ndarray, links
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("day", type=dt.date.fromisoformat)
+    p.add_argument("--adult", choices=filters.MODES, default="exclude", help="which stories run to read")
     a = p.parse_args()
-    z = np.load(DATA / f"clusters-{a.day}.npz")
-    meta = pq.read_table(DATA / f"clusters-{a.day}.parquet").to_pylist()
+    name = f"{a.day}{filters.suffix(a.adult)}"
+    z = np.load(DATA / f"clusters-{name}.npz")
+    meta = pq.read_table(DATA / f"clusters-{name}.parquet").to_pylist()
     links = [set(r["links"]) for r in meta]
     cand = eventful(z["size"], z["growth"], z["burst"])
     gid = groups(z["centroid"], z["hourly"], z["baseline"], links, cand, z["growth"] >= EVENTFUL_GROWTH)

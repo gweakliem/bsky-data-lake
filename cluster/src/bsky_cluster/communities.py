@@ -59,7 +59,8 @@ def edges(start: dt.date, end: dt.date, min_account: int, min_post: int):
     return ij["i"].to_numpy(), ij["j"].to_numpy(), accounts, posts
 
 
-def run(start: dt.date, end: dt.date, k: int, dims: int, min_account: int, min_post: int, seed: int = 0) -> None:
+def run(start: dt.date, end: dt.date, k: int, dims: int, min_account: int, min_post: int, mode: str = "exclude",
+        seed: int = 0) -> None:
     t0 = time.monotonic()
     i, j, accounts, posts = edges(start, end, min_account, min_post)
     na, npo = len(accounts), len(posts)
@@ -87,10 +88,10 @@ def run(start: dt.date, end: dt.date, k: int, dims: int, min_account: int, min_p
     np.save(DATA / f"account-emb-{stem}.npy", acc)
     np.save(DATA / f"post-emb-{stem}.npy", post)
     pq.write_table(pa.table({"uri": posts}), DATA / f"post-ids-{stem}.parquet")
-    report(start, end, m, community, k, posts, post_likes, time.monotonic() - t0)
+    report(start, end, m, community, k, posts, post_likes, time.monotonic() - t0, mode)
 
 
-def report(start, end, m, community, k, posts, post_likes, seconds, top_posts=300) -> None:
+def report(start, end, m, community, k, posts, post_likes, seconds, mode="exclude", top_posts=300) -> None:
     na = m.shape[0]
     onehot = sp.csr_matrix((np.ones(na, dtype=np.float32), (community, np.arange(na))), shape=(k, na))
     by_comm = (onehot @ m).toarray() if m.shape[1] * k < 2e9 else None  # k x posts like counts
@@ -132,11 +133,17 @@ def report(start, end, m, community, k, posts, post_likes, seconds, top_posts=30
         us = [posts[j].as_py() for j in want[c]]
         adult.append(sum(u in adult_uris or filters.did_of(u) in adult_dids for u in us) / max(len(us), 1))
 
-    lines = [f"# Communities, {start} to {end}", "",
+    flagged = np.array(adult) >= ADULT_FLAG
+    shown = {"exclude": ~flagged, "only": flagged, "include": np.ones(k, bool)}[mode]
+    lines = [f"# Communities, {start} to {end}" + ("" if mode == "exclude" else f" (adult: {mode})"), "",
              f"{na:,} accounts x {m.shape[1]:,} posts, {m.nnz:,} likes; {k} communities; {seconds / 60:.0f} min.",
-             f"[adult] marks communities where {ADULT_FLAG:.0%}+ of the posts they over-like are adult "
-             "(self-labelled, or by an account that self-labels).", ""]
+             f"A community is adult when {ADULT_FLAG:.0%}+ of the posts it over-likes are adult (labelled by "
+             "their author or by Bluesky moderation, or by an adult account): "
+             f"{flagged.sum()} of {k}. This report {'leaves them out' if mode == 'exclude' else 'shows only them' if mode == 'only' else 'shows all, marked [adult]'}; "
+             "ranks are by size among all communities.", ""]
     for rank, c in enumerate(np.argsort(-sizes), 1):
+        if not shown[c]:
+            continue
         lc = collections.Counter(l for r in meta[c] if r for l in (r.get("langs") or ["?"]))
         n = sum(lc.values()) or 1
         flag = " [adult]" if adult[c] >= ADULT_FLAG else ""
@@ -148,7 +155,7 @@ def report(start, end, m, community, k, posts, post_likes, seconds, top_posts=30
             if r and r.get("text"):
                 lines.append(f"  - {r['text'][:160].replace(chr(10), ' / ')!r} ({bsky_url(posts[j].as_py())})")
         lines.append("")
-    out = DATA / f"communities-{start}_{end}.md"
+    out = DATA / f"communities-{start}_{end}{filters.suffix(mode)}.md"
     out.write_text("\n".join(lines))
     log.info("report: %s", out)
 
@@ -162,8 +169,10 @@ def main() -> None:
     p.add_argument("--dims", type=int, default=64)
     p.add_argument("--min-account", type=int, default=10)
     p.add_argument("--min-post", type=int, default=5)
+    p.add_argument("--adult", choices=filters.MODES, default="exclude",
+                   help="leave adult communities out of the report (default), show only them, or show all")
     a = p.parse_args()
-    run(a.start, a.end, a.k, a.dims, a.min_account, a.min_post)
+    run(a.start, a.end, a.k, a.dims, a.min_account, a.min_post, a.adult)
 
 
 if __name__ == "__main__":

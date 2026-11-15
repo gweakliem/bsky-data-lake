@@ -8,7 +8,7 @@ clusters-<day>.npz/.parquet (per-cluster centroids, timing, words; merge.py read
 
 Pipeline:
 - Leave out replies (without their parent they cluster by tone: "yes, exactly"),
-  adult posts (filters.py), accounts posting over 300 times that day, and
+  adult posts (filters.py; --adult only keeps nothing else, include keeps them), accounts posting over 300 times that day, and
   copy-paste spam (one text 20+ times from 3 or fewer accounts).
 - Collapse near-identical texts (weighted by how many posts share them),
   PCA 1024 -> 64, UMAP 64 -> 8 on a sample, HDBSCAN on that, then every text group
@@ -80,15 +80,18 @@ def bsky_url(uri: str) -> str:
     return f"https://bsky.app/profile/{did}/post/{rkey}"
 
 
-def leave_out(t: pa.Table, day: dt.date, adult_uris: set[str], adult_dids: set[str]) -> tuple[pa.Table, dict]:
-    """Drop replies, adult posts and busy accounts; returns the rest and what was dropped."""
+def leave_out(t: pa.Table, day: dt.date, adult_uris: set[str], adult_dids: set[str],
+              mode: str = "exclude") -> tuple[pa.Table, dict]:
+    """Drop replies, busy accounts and adult posts (or everything else, mode "only"); returns the rest and
+    what was dropped."""
     dropped = {}
     n = len(t)
     t = t.filter(pc.is_null(t["reply_root_uri"]))
     dropped["replies"], n = n - len(t), len(t)
     adult = pc.or_(pc.is_in(t["uri"], pa.array(list(adult_uris))), pc.is_in(t["did"], pa.array(list(adult_dids))))
-    t = t.filter(pc.invert(adult))
-    dropped["adult"], n = n - len(t), len(t)
+    if mode != "include":
+        t = t.filter(pc.invert(adult) if mode == "exclude" else adult)
+        dropped["adult" if mode == "exclude" else "not adult"], n = n - len(t), len(t)
     t = t.filter(pc.invert(pc.is_in(t["did"], pa.array(list(filters.busy_accounts(day))))))
     dropped["busy accounts"] = n - len(t)
     return t, dropped
@@ -106,7 +109,7 @@ def placed(reduced: np.ndarray, cent: np.ndarray, floor: np.ndarray, chunk: int 
     return story, sim
 
 
-def run(day: dt.date, sample: int, min_cluster: int, seed: int = 0) -> None:
+def run(day: dt.date, sample: int, min_cluster: int, mode: str = "exclude", seed: int = 0) -> None:
     import umap  # slow import
 
     t0 = time.monotonic()
@@ -115,7 +118,7 @@ def run(day: dt.date, sample: int, min_cluster: int, seed: int = 0) -> None:
     adult_dids = filters.adult_accounts(*week, adult_uris)
     posts = pq.read_table(DATA / f"posts-{day}.parquet")
     total = len(posts)
-    posts, dropped = leave_out(posts, day, adult_uris, adult_dids)
+    posts, dropped = leave_out(posts, day, adult_uris, adult_dids, mode)
 
     texts = [spec.text(r) for r in posts.select(["text", "image_alts", "external_title"]).to_pylist()]
     dids = posts["did"].to_pylist()
@@ -172,13 +175,13 @@ def run(day: dt.date, sample: int, min_cluster: int, seed: int = 0) -> None:
 
     # Yesterday's sample, filtered the same way, on today's centroids.
     yday = day - dt.timedelta(days=1)
-    ys, _ = leave_out(pq.read_table(DATA / f"sample-{yday}.parquet"), yday, adult_uris, adult_dids)
+    ys, _ = leave_out(pq.read_table(DATA / f"sample-{yday}.parquet"), yday, adult_uris, adult_dids, mode)
     ystory, _ = placed(project(vectors(ys["vector"])), cent, floor)
     yday_count = np.bincount(ystory[ystory >= 0], minlength=k)
 
     full = full_centroids(vec, post_story, k)
     report(day, posts, texts, gid, first, sim, post_story, k, yday_count, len(ys), full, total, dropped,
-           time.monotonic() - t0)
+           time.monotonic() - t0, mode)
 
 
 def full_centroids(vec: np.ndarray, post_story: np.ndarray, k: int) -> np.ndarray:
@@ -202,7 +205,8 @@ def growth_of(today: np.ndarray, yday: np.ndarray, n: int, n_yday: int) -> np.nd
 
 
 def report(day, posts, texts, gid, first, sim, post_story, k, yday_count, n_yday, full, total, dropped, seconds,
-           top_stories=30, top_topics=15) -> None:
+           mode, top_stories=30, top_topics=15) -> None:
+    name = f"{day}{filters.suffix(mode)}"
     langs = [lang_of(x) for x in posts["langs"].to_pylist()]
     urls = posts["external_uri"].to_pylist()
     titles = posts["external_title"].to_pylist()
@@ -258,13 +262,13 @@ def report(day, posts, texts, gid, first, sim, post_story, k, yday_count, n_yday
     for g, w in zip(multi, every_words[k:]):
         gwords[g] = w
 
-    np.savez(DATA / f"clusters-{day}.npz", centroid=full, hourly=hourly, baseline=baseline, size=size,
+    np.savez(DATA / f"clusters-{name}.npz", centroid=full, hourly=hourly, baseline=baseline, size=size,
              growth=growth, burst=burst, lang=np.array(dom), group=group)
     pq.write_table(pa.table({"cluster": pa.array(range(k)), "words": pa.array(words),
-                             "links": pa.array([sorted(x) for x in links])}), DATA / f"clusters-{day}.parquet")
+                             "links": pa.array([sorted(x) for x in links])}), DATA / f"clusters-{name}.parquet")
     pq.write_table(pa.table({"uri": posts["uri"], "cluster": pa.array(post_story),
                              "story": pa.array(np.where(post_story >= 0, group[post_story.clip(0)], -1))}),
-                   DATA / f"stories-{day}.parquet")
+                   DATA / f"stories-{name}.parquet")
 
     def line(g):
         parts = f" in {len(gm[g])} clusters" if len(gm[g]) > 1 else ""
@@ -274,7 +278,7 @@ def report(day, posts, texts, gid, first, sim, post_story, k, yday_count, n_yday
 
     stories = [g for g in np.argsort(-score) if score[g] > 0][:top_stories]
     topics = list(np.argsort(-gsize)[:top_topics])
-    lines = [f"# Stories, {day}", "",
+    lines = [f"# Stories, {day}" + ("" if mode == "exclude" else f" (adult: {mode})"), "",
              f"{total:,} embedded posts; left out {', '.join(f'{v:,} {k_}' for k_, v in dropped.items())}; "
              f"{n:,} clustered into {k} clusters, {100 * (post_story >= 0).mean():.0f}% assigned; "
              f"{len(multi)} stories merged from {sum(len(gm[g]) for g in multi)} clusters; {seconds / 60:.0f} min.", "",
@@ -310,7 +314,7 @@ def report(day, posts, texts, gid, first, sim, post_story, k, yday_count, n_yday
                 i = first[gg]
                 lines.append(f"  - {texts[i][:200].replace(chr(10), ' / ')!r} ({bsky_url(uris[i])})")
         lines.append("")
-    out = DATA / f"stories-{day}.md"
+    out = DATA / f"stories-{name}.md"
     out.write_text("\n".join(lines))
     log.info("report: %s", out)
 
@@ -321,8 +325,10 @@ def main() -> None:
     p.add_argument("day", type=dt.date.fromisoformat)
     p.add_argument("--sample", type=int, default=250_000)
     p.add_argument("--min-cluster", type=int, default=60)
+    p.add_argument("--adult", choices=filters.MODES, default="exclude",
+                   help="leave adult posts out (default), keep only them, or keep everything")
     a = p.parse_args()
-    run(a.day, a.sample, a.min_cluster)
+    run(a.day, a.sample, a.min_cluster, a.adult)
 
 
 if __name__ == "__main__":

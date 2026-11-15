@@ -1,0 +1,32 @@
+[project]
+name = "bsky-labels"
+version = "0.1.0"
+description = "Bluesky's moderation labels (mod.bsky.app) into silver"
+authors = [
+    { name = "Gordon Weakliem", email = "gordon.weakliem@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "bsky-enrich",
+    "cbor2>=6.3.0",
+    "duckdb>=1.4.0",
+    "pyiceberg[glue,pyarrow]>=0.12.0",
+    "websockets>=17.4",
+]
+
+[project.scripts]
+bsky-labels = "bsky_labels.job:main"
+bsky-labels-backfill = "bsky_labels.backfill:main"
+
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pyiceberg[sql-sqlite]>=0.12.0",
+    "pytest>=9.2.0",
+]
+
+[tool.uv.sources]
+bsky-enrich = { path = "../enrich", editable = true }

@@ -226,7 +226,8 @@ def report(day, posts, texts, gid, first, sim, post_story, k, yday_count, n_yday
     growth = growth_of(size, yday_count, n, n_yday)
     burst = np.array([merge.relative_burst(hourly[c], baseline[c])[0] for c in range(k)])
     links = [{u for i in m if (u := urls[i]) and domain(u)} for m in members]
-    group = merge.groups(full, hourly, baseline, links, merge.eventful(size, growth, burst))
+    group = merge.groups(full, hourly, baseline, links, merge.eventful(size, growth, burst),
+                         growth >= merge.EVENTFUL_GROWTH)
 
     ng = group.max() + 1
     gm = [np.flatnonzero(group == g) for g in range(ng)]

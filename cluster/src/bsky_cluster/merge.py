@@ -11,12 +11,13 @@ Timing is each cluster's hourly profile minus its language's (Japanese posts pea
 in Japanese daytime whatever they are about), so a news spike shows as excess at
 the hour it broke. Two clusters are linked when either
   - their centroids are close and they peak together (SAME_TOPIC, SAME_TIME),
-  - their centroids are close and they share links to the same pages (SHARED_LINKS),
-  - their centroids are very close and timing doesn't contradict (CLOSE_TOPIC):
-    the same story in another time zone can peak hours apart,
+  - their centroids are close and they share links to the same pages (SHARED_LINKS):
+    this is what joins the same story in another time zone, which peaks hours apart,
 and never when their timing is opposite (OPPOSITE_TIME). Groups are the connected
-components. Only eventful clusters (growing or bursting) are merged; standing
-topics stay as they are.
+components. Only eventful clusters (growing or bursting) are merged, and every
+link needs one side growing: a flat cluster can join a story (the status-page
+crowd joins the Microsoft outage) but two flat ones can't chain each other in
+(the security feed shares CVE links with the status-page crowd).
 """
 
 from __future__ import annotations
@@ -31,7 +32,6 @@ from bsky_cluster.fetch import DATA
 
 SAME_TOPIC, SAME_TIME = 0.85, 0.3
 SHARED_LINKS, SHARED_TOPIC = 3, 0.80
-CLOSE_TOPIC = 0.88
 OPPOSITE_TIME = -0.4
 EVENTFUL_GROWTH, EVENTFUL_BURST, EVENTFUL_SIZE = 1.5, 2.0, 200
 
@@ -60,7 +60,7 @@ def eventful(size: np.ndarray, growth: np.ndarray, burst: np.ndarray) -> np.ndar
 
 
 def groups(centroid: np.ndarray, hourly: np.ndarray, baseline: np.ndarray, links: list[set[str]],
-           candidates: np.ndarray) -> np.ndarray:
+           candidates: np.ndarray, growing: np.ndarray) -> np.ndarray:
     """A group id per cluster: linked candidates share one, everything else is on its own."""
     k = len(centroid)
     parent = np.arange(k)
@@ -77,11 +77,10 @@ def groups(centroid: np.ndarray, hourly: np.ndarray, baseline: np.ndarray, links
     for a in range(len(ev)):
         for b in range(a + 1, len(ev)):
             s, t = sem[a, b], tim[a, b]
-            if t <= OPPOSITE_TIME:
+            if t <= OPPOSITE_TIME or not (growing[ev[a]] or growing[ev[b]]):
                 continue
             shared = len(links[ev[a]] & links[ev[b]])
-            if (s >= SAME_TOPIC and t >= SAME_TIME) or (s >= SHARED_TOPIC and shared >= SHARED_LINKS) \
-                    or s >= CLOSE_TOPIC:
+            if (s >= SAME_TOPIC and t >= SAME_TIME) or (s >= SHARED_TOPIC and shared >= SHARED_LINKS):
                 parent[root(ev[a])] = root(ev[b])
     roots = np.array([root(i) for i in range(k)])
     _, gid = np.unique(roots, return_inverse=True)
@@ -96,7 +95,7 @@ def main() -> None:
     meta = pq.read_table(DATA / f"clusters-{a.day}.parquet").to_pylist()
     links = [set(r["links"]) for r in meta]
     cand = eventful(z["size"], z["growth"], z["burst"])
-    gid = groups(z["centroid"], z["hourly"], z["baseline"], links, cand)
+    gid = groups(z["centroid"], z["hourly"], z["baseline"], links, cand, z["growth"] >= EVENTFUL_GROWTH)
     for g in np.unique(gid):
         cs = np.flatnonzero(gid == g)
         if len(cs) < 2:

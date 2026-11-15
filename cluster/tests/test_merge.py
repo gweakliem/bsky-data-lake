@@ -27,7 +27,7 @@ def test_same_topic_and_time_merge_but_opposite_time_does_not():
     topic = unit([1, 0.1, 0])
     cent = np.stack([topic, unit([1, 0.12, 0]), unit([1, 0.11, 0.01])])
     hourly = np.stack([half_day(12), half_day(13), half_day(0)])
-    g = merge.groups(cent, hourly, np.stack([FLAT] * 3), [set(), set(), set()], np.ones(3, bool))
+    g = merge.groups(cent, hourly, np.stack([FLAT] * 3), [set(), set(), set()], np.ones(3, bool), np.ones(3, bool))
     assert g[0] == g[1] and g[2] != g[0]
 
 
@@ -37,16 +37,16 @@ def test_shared_links_merge_a_story_across_time_zones():
     hourly = np.stack([spike(8), spike(14)])
     link = {"https://example.com/outage"}
     others = {"https://example.com/a", "https://example.com/b"}
-    assert merge.groups(cent, hourly, np.stack([FLAT] * 2), [set(), set()], np.ones(2, bool)).tolist() == [0, 1]
+    assert merge.groups(cent, hourly, np.stack([FLAT] * 2), [set(), set()], np.ones(2, bool), np.ones(2, bool)).tolist() == [0, 1]
     shared = [link | others, link | others]
-    g = merge.groups(cent, hourly, np.stack([FLAT] * 2), shared, np.ones(2, bool))
+    g = merge.groups(cent, hourly, np.stack([FLAT] * 2), shared, np.ones(2, bool), np.ones(2, bool))
     assert g[0] == g[1]
 
 
 def test_only_candidates_merge():
     cent = np.stack([unit([1, 0, 0])] * 2)
     hourly = np.stack([spike(5)] * 2)
-    g = merge.groups(cent, hourly, np.stack([FLAT] * 2), [set(), set()], np.array([True, False]))
+    g = merge.groups(cent, hourly, np.stack([FLAT] * 2), [set(), set()], np.array([True, False]), np.ones(2, bool))
     assert g[0] != g[1]
 
 
@@ -56,3 +56,12 @@ def test_relative_burst_is_against_the_language_baseline():
     b, _ = merge.relative_burst(day * 50, day / day.sum())
     assert abs(b - 1) < 1e-6
     assert merge.relative_burst(spike(3), FLAT)[1] == 3
+
+
+def test_two_flat_clusters_do_not_chain_into_a_story():
+    # 0 is a growing story; 1 is flat and joins it; 2 is flat and only linked to 1.
+    cent = np.stack([unit([1, 0, 0]), unit([1, 0.45, 0]), unit([1, 0.9, 0])])  # 0-1 0.91, 1-2 0.95, 0-2 0.74
+    hourly = np.stack([half_day(12)] * 3)
+    g = merge.groups(cent, hourly, np.stack([FLAT] * 3), [set()] * 3, np.ones(3, bool),
+                     np.array([True, False, False]))
+    assert g[0] == g[1] and g[2] != g[1]

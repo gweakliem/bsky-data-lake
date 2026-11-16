@@ -216,8 +216,8 @@ Run across a night, Mountain time: steps 1–3 in the evening, the copy while no
 
 ### Decide
 
-- ~~**`lance/`:** copy it or rebuild it.~~ Copy: phase C's check passed. Still look at why it's 415 GB before copying.
-- **NAT:** start the new platform stack on the NAT instance (M1), or keep the managed gateway and change it later.
+- ~~**`lance/`:** copy it or rebuild it.~~ Copy: phase C's check passed. Its 415 GB was mostly a day of old versions' index files; retention is now 2 hours (`1e818aa`).
+- ~~**NAT.**~~ The new platform stack runs the fck-nat instance (M1).
 - ~~**`post_edges_backfill`:** copy it or drop it.~~ Dropped: a temporary table.
 - ~~**Overlap length.**~~ About a day, then phase E across a night, Mountain time.
 

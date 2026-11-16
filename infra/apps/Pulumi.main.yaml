@@ -8,7 +8,7 @@ config:
   bsky-apps:reportsImageTag: b9e249c
   bsky-apps:labelsImageTag: 00c3b94-labels
   bsky-apps:embedImageTag: 04481b5
-  bsky-apps:searchImageTag: e3-20261114
+  bsky-apps:searchImageTag: e3-20261116
   bsky-apps:reportsMemoryLimit: 12Gi
   bsky-apps:reportsDuckdbMemory: 10GB
   bsky-apps:indexMemoryLimit: 12Gi

@@ -192,3 +192,27 @@ def test_merge_vector_deltas_keeps_the_base_and_one_delta(db):
     stats = table.index_stats(index.VECTOR_INDEX)
     assert (stats.num_indices, stats.num_indexed_rows, stats.num_unindexed_rows) == (2, 768, 0)
     assert len(table.search(batch(0, 1)["vector"][0].as_py()).limit(5).to_list()) == 5
+
+
+def test_maintenance_keeps_only_two_hours_of_versions():
+    from bsky_search import index
+
+    class Table:
+        def __init__(self):
+            self.cleanup = None
+
+        def list_indices(self):
+            return []
+
+        def count_rows(self):
+            return 10  # below the vector index's threshold
+
+        def create_index(self, column, config):
+            pass
+
+        def optimize(self, cleanup_older_than=None):
+            self.cleanup = cleanup_older_than
+
+    t = Table()
+    index.maintain(t)
+    assert t.cleanup == dt.timedelta(hours=2)

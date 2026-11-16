@@ -12,12 +12,15 @@ config:
   bsky-apps:reportsMemoryLimit: 12Gi
   bsky-apps:reportsDuckdbMemory: 10GB
   bsky-apps:indexMemoryLimit: 12Gi
-  bsky-apps:ingestReplicas: "0"
-  bsky-apps:loaderReplicas: "0"
+  # Phase D: the new account ingests alongside the old one.
+  bsky-apps:ingestReplicas: "1"
+  bsky-apps:loaderReplicas: "1"
   bsky-apps:silverSuspend: "true"
   bsky-apps:embedSuspend: "true"
   bsky-apps:labelsSuspend: "true"
   bsky-apps:indexSuspend: "true"
   bsky-apps:reportsSuspend: "true"
   bsky-apps:searchReplicas: "0"
+  # The copy job (migrate/); its CronJobs appear once BSKY_MIGRATION_PLAN_FILE exists.
+  bsky-apps:migrationImageTag: a706bb7
 encryptionsalt: v1:O/LEWOFdOS0=:v1:c0cc0Jr0Us+9vUCY:+grEkgU9H0ygHzsziUvZwGB18UjnAA==

@@ -164,7 +164,11 @@ Copies within one region have no transfer charge, only request charges. Both acc
   - **Data stack applied:** 73 resources.
   - **Platform stack applied:** 59 resources, with the fck-nat NAT instance (M1) instead of the managed gateway. Both EKS add-ons are active and `kubectl top` works. The kube context is `bsky-main`.
   - **Images:** the 7 current tags are copied to the new ECR with `docker buildx imagetools create`.
-  - **Next:** the apps stack, the cross-account read policy on the old warehouse, and the Lance check.
+  - **Apps stack applied:** 37 resources, with nothing writing. Fluent Bit, event-exporter and reports-web (a new NLB URL) run; the ingestor, loader and search are at 0, and every CronJob is suspended.
+  - **Copy job (`migrate/`, see its CLAUDE.md):** re-writes each table from its metadata file one partition at a time, resumably, and copies `lance/` and `reports/inputs/` server side. It reads the old warehouse through a read-only bucket policy (old data stack, `migrationReadPolicy`), so the old Glue catalog isn't needed. The role `bsky-migration` (new data stack, `migrationRole`) writes the new warehouse and catalog.
+  - **Lance check passed:** `lance-test/` (89 objects, 552 MB) copied in 4 s and opened in the new bucket with the same rows (105,221), version, 6 indexes and query results. So `lance/` is copied, not rebuilt.
+  - **Old tables (2026-11-16):** no delete files; one partition spec and one schema each. Bronze is partitioned by `day` and `hour`, silver by `day`; `silver_runs` and `post_edges_backfill` are unpartitioned.
+  - **Next:** the platform change for the copy job (ECR repository and Pod Identity), building and pushing its image, then phase D.
 - **What the stand-up turned up:**
   - **New-account EC2 validation:** a new account can't launch instances until AWS validates it (minutes, up to 4 hours, with an email). The first platform apply failed on the NAT instance and EKS add-ons until it cleared.
   - **fck-nat's interfaces:** traffic comes in on the fixed interface (`eni_id`) and leaves masqueraded through the instance's own interface. fck-nat moves the Elastic IP there (`eip_id`) and turns off that interface's source/destination check, so its role needs `ec2:ModifyNetworkInterfaceAttribute` on network interfaces and `ec2:AssociateAddress` on the Elastic IP. With the Elastic IP on the fixed interface instead, return traffic was dropped and nothing in the private subnets reached the internet.
@@ -203,7 +207,7 @@ Copies within one region have no transfer charge, only request charges. Both acc
 
 ### Decide
 
-- **`lance/`:** copy it (fast, if phase C's check passes), or rebuild from `post_embeddings` in the new account (about 8 h load plus 8 h reindex, but a clean dataset). Copying is the default.
+- ~~**`lance/`:** copy it or rebuild it.~~ Copy: phase C's check passed. Still look at why it's 415 GB before copying.
 - **NAT:** start the new platform stack on the NAT instance (M1), or keep the managed gateway and change it later.
 - **`post_edges_backfill`:** copy it or drop it.
 - **Overlap length:** how long phase D runs before the freeze. A day is enough to trust the new ingest.

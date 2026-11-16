@@ -343,8 +343,12 @@ ecr_lifecycle = json.dumps(
     }
 )
 
+# WP M5: the one-off lake copy (migrate/), in the new account only.
+migration = config.get_bool("migration", False)
+
 repositories = {}
-for image in ["iceberg-loader", "ingest", "silver", "reports", "embed", "search", "labels"]:
+for image in ["iceberg-loader", "ingest", "silver", "reports", "embed", "search", "labels",
+              *(["migrate"] if migration else [])]:
     repo = aws.ecr.Repository(
         image,
         name=f"bsky/{image}",
@@ -423,6 +427,14 @@ pod_identities = {
         role_arn=data.require_output("fluent_bit_role_arn"),
     ),
 }
+if migration:
+    pod_identities["migration"] = aws.eks.PodIdentityAssociation(
+        "migration",
+        cluster_name=cluster.name,
+        namespace=namespace,
+        service_account="migration",
+        role_arn=data.require_output("migration_role_arn"),
+    )
 
 # --- Observability add-ons: pod and node metrics ---
 

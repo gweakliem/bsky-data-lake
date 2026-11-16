@@ -450,6 +450,91 @@ labels_job = k8s.batch.v1.CronJob(
     opts=opts,
 )
 
+# --- WP M5: the one-off lake copy into the member account (migrate/) ---
+# Only once the freeze's plan exists: it names the old tables' metadata files and
+# the old bucket, so it's a local file (migrationPlanFile / BSKY_MIGRATION_PLAN_FILE),
+# never stack config. Three suspended CronJobs, one per step, each started by hand:
+#   kubectl -n bsky create job --from=cronjob/migrate-tables migrate-tables-$(date +%s)
+# tables and objects resume where a previous run stopped.
+
+migration_plan_setting = config.get("migrationPlanFile") or os.environ.get("BSKY_MIGRATION_PLAN_FILE")
+migrate_jobs = {}
+if migration_plan_setting:
+    migration_plan_file = Path(migration_plan_setting).expanduser()
+    if not migration_plan_file.is_file():
+        raise ValueError(f"{migration_plan_file} not found: write it with `bsky-migrate plan` (migrate/CLAUDE.md)")
+    migrate_image_tag = config.require("migrationImageTag")
+    migrate_image = repository_urls.apply(lambda urls: f"{urls['migrate']}:{migrate_image_tag}")
+    migrate_memory_limit = config.get("migrationMemoryLimit") or "16Gi"
+    migrate_labels = {"app.kubernetes.io/name": "migrate", "app.kubernetes.io/part-of": "bsky-data-lake"}
+    migrate_sa = k8s.core.v1.ServiceAccount(
+        "migration",
+        # Must match the platform stack's Pod Identity association.
+        metadata=k8s.meta.v1.ObjectMetaArgs(name="migration", namespace=ns),
+        opts=opts,
+    )
+    migrate_plan = k8s.core.v1.ConfigMap(
+        "migration-plan",
+        metadata=k8s.meta.v1.ObjectMetaArgs(name="migration-plan", namespace=ns, labels=migrate_labels),
+        data={"plan.json": migration_plan_file.read_text()},
+        opts=opts,
+    )
+    for step in ("tables", "objects", "verify"):
+        migrate_jobs[step] = k8s.batch.v1.CronJob(
+            f"migrate-{step}",
+            metadata=k8s.meta.v1.ObjectMetaArgs(name=f"migrate-{step}", namespace=ns, labels=migrate_labels),
+            spec=k8s.batch.v1.CronJobSpecArgs(
+                schedule="0 0 1 1 *",  # never fires: suspended, run by hand
+                time_zone="Etc/UTC",
+                suspend=True,
+                concurrency_policy="Forbid",
+                job_template=k8s.batch.v1.JobTemplateSpecArgs(
+                    metadata=k8s.meta.v1.ObjectMetaArgs(labels=migrate_labels),
+                    spec=k8s.batch.v1.JobSpecArgs(
+                        # A retry resumes, so a couple are cheap.
+                        backoff_limit=2,
+                        active_deadline_seconds=24 * 3600,
+                        template=k8s.core.v1.PodTemplateSpecArgs(
+                            metadata=k8s.meta.v1.ObjectMetaArgs(
+                                labels=migrate_labels,
+                                annotations={
+                                    "karpenter.sh/do-not-disrupt": "true",
+                                    # A new plan restarts nothing running, but the next Job reads it.
+                                    "bsky/plan-hash": hashlib.sha256(migration_plan_file.read_bytes()).hexdigest()[:16],
+                                },
+                            ),
+                            spec=k8s.core.v1.PodSpecArgs(
+                                service_account_name=migrate_sa.metadata.name,
+                                restart_policy="Never",
+                                security_context=pod_security,
+                                volumes=[k8s.core.v1.VolumeArgs(
+                                    name="plan",
+                                    config_map=k8s.core.v1.ConfigMapVolumeSourceArgs(name=migrate_plan.metadata.name),
+                                )],
+                                containers=[
+                                    k8s.core.v1.ContainerArgs(
+                                        name="migrate",
+                                        image=migrate_image,
+                                        args=[step, "/plan/plan.json"],
+                                        env=[k8s.core.v1.EnvVarArgs(name="AWS_REGION", value=region)],
+                                        volume_mounts=[k8s.core.v1.VolumeMountArgs(
+                                            name="plan", mount_path="/plan", read_only=True,
+                                        )],
+                                        resources=k8s.core.v1.ResourceRequirementsArgs(
+                                            requests={"cpu": "2", "memory": migrate_memory_limit},
+                                            limits={"memory": migrate_memory_limit},
+                                        ),
+                                        security_context=container_security,
+                                    )
+                                ],
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            opts=opts,
+        )
+
 # --- Search: the index job and the query API (search/, WP E3) ---
 # One image, bsky/search. The index CronJob is the Lance dataset's only writer;
 # the API opens it read-only and picks up new versions within a minute.

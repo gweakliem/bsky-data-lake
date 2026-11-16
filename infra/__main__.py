@@ -74,6 +74,19 @@ embed_alarm_actions = config.get_bool("embedAlarmActions", False)
 index_alarm_actions = config.get_bool("indexAlarmActions", False)
 # And the moderation-labels job (labelsAlarmActions), suspended until its backfill is loaded.
 labels_alarm_actions = config.get_bool("labelsAlarmActions", False)
+# WP M5, the move to a member account. Both default off; the names and IDs they
+# need come from .env (shared by both accounts' stacks), so a flag per stack
+# decides which half each one creates.
+# In the new account: a pod role that reads the old warehouse and writes this one.
+migration_role = config.get_bool("migrationRole", False)
+migration_source_bucket = config.get("migrationSourceBucket") or os.environ.get("BSKY_MIGRATION_SOURCE_BUCKET")
+if migration_role and not migration_source_bucket:
+    raise ValueError("migrationRole needs BSKY_MIGRATION_SOURCE_BUCKET (the old warehouse bucket) in .env")
+# In the old account: let the new account's migration role and developer read the warehouse.
+migration_read_policy = config.get_bool("migrationReadPolicy", False)
+migration_reader_account = config.get("migrationReaderAccount") or os.environ.get("BSKY_MIGRATION_READER_ACCOUNT")
+if migration_read_policy and not migration_reader_account:
+    raise ValueError("migrationReadPolicy needs BSKY_MIGRATION_READER_ACCOUNT (the new account's ID) in .env")
 # The EKS cluster (platform stack), for Container Insights' log group and alarms.
 cluster_name = config.get("clusterName") or "bsky"
 container_insights_retention_days = config.get_int("containerInsightsRetentionDays") or 14
@@ -960,6 +973,111 @@ if manage_iam:
         for table in tables
         for kind, configuration in _optimizer_configs(optimizer_role.arn, min_input_files).items()
     }
+
+# --- WP M5: copying the lake into the member account (migrate/) ---
+# Prefixes the copy reads from the old warehouse and writes here. lance-test/ is
+# the small scratch index, copied first to check Lance datasets survive the move.
+MIGRATION_PREFIXES = ["iceberg", "lance", "lance-test", "reports"]
+MIGRATION_ROLE_NAME = "bsky-migration"
+# The new account's developer permission set, for the lance-test check from a laptop.
+MIGRATION_DEVELOPER_ROLE = "AWSReservedSSO_BskyDataLakeDeveloper-Workloads_*"
+
+if manage_iam and migration_role:
+    source_arn = f"arn:aws:s3:::{migration_source_bucket}"
+    migration_policy_document = pulumi.Output.all(account_id, region).apply(
+        lambda args: json.dumps(
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Sid": "ListOldWarehouse",
+                        "Effect": "Allow",
+                        "Action": "s3:ListBucket",
+                        "Resource": source_arn,
+                        "Condition": {"StringLike": {"s3:prefix": [f"{p}/*" for p in MIGRATION_PREFIXES]}},
+                    },
+                    {
+                        "Sid": "ReadOldWarehouse",
+                        "Effect": "Allow",
+                        "Action": ["s3:GetObject", "s3:GetObjectTagging"],
+                        "Resource": [f"{source_arn}/{p}/*" for p in MIGRATION_PREFIXES],
+                    },
+                    {
+                        "Sid": "ListWarehouse",
+                        "Effect": "Allow",
+                        "Action": "s3:ListBucket",
+                        "Resource": warehouse_bucket_arn,
+                        "Condition": {"StringLike": {"s3:prefix": [f"{p}/*" for p in MIGRATION_PREFIXES]}},
+                    },
+                    {
+                        "Sid": "WriteWarehouse",
+                        "Effect": "Allow",
+                        "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"],
+                        "Resource": [f"{warehouse_bucket_arn}/{p}/*" for p in MIGRATION_PREFIXES],
+                    },
+                    {
+                        "Sid": "WriteCatalog",
+                        "Effect": "Allow",
+                        "Action": ["glue:GetDatabase", "glue:GetDatabases", "glue:GetTable", "glue:GetTables",
+                                   "glue:CreateTable", "glue:UpdateTable"],
+                        "Resource": [
+                            f"arn:aws:glue:{args[1]}:{args[0]}:catalog",
+                            *[f"arn:aws:glue:{args[1]}:{args[0]}:database/{d}" for d in (glue_database, silver_database_name)],
+                            *[f"arn:aws:glue:{args[1]}:{args[0]}:table/{d}/*" for d in (glue_database, silver_database_name)],
+                        ],
+                    },
+                ],
+            }
+        )
+    )
+    migration_policy = bsky_iam.policy(
+        "migration",
+        name=MIGRATION_ROLE_NAME,
+        description="WP M5: read the old warehouse, write this account's tables and objects",
+        policy=migration_policy_document,
+    )
+    migration = _pod_role("migration", MIGRATION_ROLE_NAME, "EKS pod role for the one-off lake copy (WP M5)")
+    aws.iam.RolePolicyAttachment("migration", role=migration.name, policy_arn=migration_policy.arn)
+    pulumi.export("migration_role_arn", migration.arn)
+
+if migration_read_policy:
+    # Read-only, and only for the new account's migration role and developer. The bucket
+    # had no policy before, so this owns the whole document; remove it after the move.
+    reader_root = f"arn:aws:iam::{migration_reader_account}:root"
+    readers = [
+        f"arn:aws:iam::{migration_reader_account}:role/bsky/{MIGRATION_ROLE_NAME}",
+        f"arn:aws:iam::{migration_reader_account}:role/aws-reserved/sso.amazonaws.com/*{MIGRATION_DEVELOPER_ROLE}",
+    ]
+    migration_bucket_policy = aws.s3.BucketPolicy(
+        "warehouse-migration-read",
+        bucket=existing_buckets["warehouse"].bucket,
+        policy=json.dumps(
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Sid": "MigrationList",
+                        "Effect": "Allow",
+                        "Principal": {"AWS": reader_root},
+                        "Action": "s3:ListBucket",
+                        "Resource": warehouse_bucket_arn,
+                        "Condition": {
+                            "ArnLike": {"aws:PrincipalArn": readers},
+                            "StringLike": {"s3:prefix": [f"{p}/*" for p in MIGRATION_PREFIXES]},
+                        },
+                    },
+                    {
+                        "Sid": "MigrationRead",
+                        "Effect": "Allow",
+                        "Principal": {"AWS": reader_root},
+                        "Action": ["s3:GetObject", "s3:GetObjectTagging"],
+                        "Resource": [f"{warehouse_bucket_arn}/{p}/*" for p in MIGRATION_PREFIXES],
+                        "Condition": {"ArnLike": {"aws:PrincipalArn": readers}},
+                    },
+                ],
+            }
+        ),
+    )
 
 # --- Alerts: pipeline alarms and a cost budget, by email ---
 

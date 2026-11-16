@@ -9,4 +9,6 @@ config:
   # the repo's .env, so the admin's address isn't committed.
   # An fck-nat instance instead of the managed NAT gateway (WP M1).
   bsky-platform:natMode: instance
+  # WP M5: ECR repository and Pod Identity for the copy job.
+  bsky-platform:migration: "true"
 encryptionsalt: v1:eH57lb1H87A=:v1:Z9M5N8ggVL/yhrat:vSmHOcv1vVr1A7wxt1Psz1cHs/GlhA==

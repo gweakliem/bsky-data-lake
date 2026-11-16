@@ -18,4 +18,6 @@ config:
   # Job alarms notify only once their CronJobs run (phase E of the move).
   bsky-data-lake:embedAlarmActions: "false"
   bsky-data-lake:labelsAlarmActions: "false"
+  # WP M5: the copy job's role (reads the old warehouse named in .env).
+  bsky-data-lake:migrationRole: "true"
 encryptionsalt: v1:s7ettW5UL40=:v1:EKsc8xPXxR/BWg9F:ewcMdDovZv55GE4uZMX6AEA3+lHHWA==

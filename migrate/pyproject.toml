@@ -1,0 +1,29 @@
+[project]
+name = "bsky-migrate"
+version = "0.1.0"
+description = "One-off: copy the lake's Iceberg tables and objects into the member account (WP M5)"
+authors = [
+    { name = "Gordon Weakliem", email = "gordon.weakliem@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "boto3>=1.40.0",
+    "bsky-enrich",
+    "pyiceberg[glue,pyarrow]>=0.12.0",
+]
+
+[project.scripts]
+bsky-migrate = "bsky_migrate.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pyiceberg[sql-sqlite]>=0.12.0",
+    "pytest>=9.2.0",
+]
+
+[tool.uv.sources]
+bsky-enrich = { path = "../enrich", editable = true }

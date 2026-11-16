@@ -79,18 +79,124 @@ The account budget `bsky-monthly` is $250 (deployment plan, D6).
 
 ## WP M5: move the workloads out of the management account
 
-- **Status: proposed; decision needed.**
+- **Status: in progress (2026-11-16). Option 2 chosen:** a member account for the data lake. Phase A is done. Phases B–F are planned below and nothing has moved yet.
 - **Why:** the data lake runs in the AWS Organization's management account, the account that owns the organization and pays the bill. AWS recommends keeping the management account free of workloads:
   - Service control policies (SCPs, the organization-wide guardrails) don't apply to the management account, so they can't limit what its roles do.
   - A credential leaked from a workload in the management account sits next to control of the whole organization: accounts, billing and IAM Identity Center.
   - Costs and permissions are cleaner when each account holds one thing.
-- **Options:**
-  1. **Leave it, with compensating controls.** Keep the developer role's permissions boundary (`infra/iam-bootstrap`), finish M4, and keep workload roles least-privilege. This costs nothing, and is reasonable while one person runs the project.
-  2. **New member account for the data lake.** Create an account in the organization, bootstrap IAM there (`infra/iam-bootstrap`), and point the Pulumi stacks at it. Then move the data:
-     - S3: copy the raw and warehouse buckets. Copies within a region pay request charges, not transfer.
-     - Glue: re-register the Iceberg tables in the new account's catalog, pointing at the copied locations.
-     - EKS, VPC and IAM: create fresh from the stacks rather than move.
-     - Cut over the ingestor last, so the gap is covered by cursor resume.
-  3. **Cross-account data in place.** Leave the buckets where they are and run compute in a member account with cross-account bucket and Glue access. This moves less data, but the workloads still depend on the management account, which defeats most of the purpose.
-- **Decide:** option 1 or 2, and when. Option 2 is easiest before the lake grows further. The warehouse was 136 GB of silver on 2026-11-10, plus bronze.
-- **Acceptance for option 2:** every stack deployed in the member account, the jobs running there, the old resources deleted from the management account, and the management account left with only Organizations, IAM Identity Center, billing and CloudTrail.
+  - It gets harder to move as the lake grows, which is why it goes ahead of other work.
+- **Options considered:**
+  1. Leave it, with compensating controls (permissions boundary, M4, least-privilege roles).
+  2. **New member account for the data lake (chosen).**
+  3. Cross-account data in place: compute in a member account, buckets left in the management account. Rejected because the workloads would still depend on the management account.
+
+### Target layout
+
+- **Management account:** Organizations, IAM Identity Center, consolidated billing, the organization-wide budget, cost allocation tags and (M4) CloudTrail. No workloads.
+- **OU `Workloads`:** one account per project, so the bill splits by linked account without tags. `bsky-data-lake` is the first. A later production environment gets its own account (`Workloads/Prod`).
+- **SCP on `Workloads`:** deny `organizations:LeaveOrganization`, and deny every action by the root user (`aws:PrincipalArn` like `arn:aws:iam::*:root`). `FullAWSAccess` stays attached. A region restriction is deferred, because it needs exceptions for global services.
+- **Root access management** is centralized in the management account, so member accounts have no root credentials. Root access is not delegated to a member account: there is no security account to delegate to.
+- **Account IDs stay out of the repo,** as before. They live in `~/.aws/config` and `.env`.
+
+### Phase A: account and access (done 2026-11-16)
+
+- Member account `bsky-data-lake` created in OU `Workloads`, tagged `project=bsky-data-lake`.
+- `infra/iam-bootstrap/` applied in the new account:
+  - the boundary `bsky-workload-boundary`;
+  - a separate permission set `BskyDataLakeDeveloper-Workloads` (`PowerUserAccess` plus the inline policy rendered for the new account), since the existing permission set's inline policy names the management account's ID.
+- Verified with the new developer profile: creating a role under `/bsky/` with the boundary succeeds. Creating one without the boundary, creating one outside `/bsky/`, removing a role's boundary and editing the boundary are all denied.
+- A temporary `AdministratorAccess` assignment on the new account was used for the bootstrap. Remove it when phase A is closed.
+- **Still to confirm in the console:** SCP attached; root access management on; billing access for IAM activated (M3 step 1); cost allocation tags `project`, `stack` and `component` active.
+
+### What can't simply be copied
+
+- **Bucket names change.** The buckets are in S3's account-regional namespace (`<prefix>-<account>-<region>-an`), so the new account's names follow from its ID. The data stack derives them (`createBuckets`), and nothing secret goes in config. They still differ from the old names, which is what matters below. The Pulumi state bucket follows the same pattern.
+- **Iceberg metadata holds absolute paths.** Every metadata file, manifest list and manifest names its files as `s3://<warehouse>/iceberg/...`. Copying the objects into a bucket with a new name leaves tables pointing at the old bucket.
+  - Iceberg's `rewrite_table_path` procedure fixes this, but it needs Spark with Iceberg 1.8 or later, and Sail can't run `CALL`.
+  - **So tables are re-written, not copied.** A copy job reads each old table and appends its rows to a new table of the same schema and partitioning in the new account, day by day. Snapshot history isn't carried over, which nothing here needs. Every row keeps its values, including `event_id`, `bronze_ingested_at` and the run-state tables' watermarks.
+- **Lance stores relative paths** inside a dataset (to verify, see phase C), so the search index can be copied as plain objects.
+- **EKS, VPC, NAT, IAM roles, queues, alarms and log groups** are created fresh from the stacks. Nothing is moved.
+
+### Sizes (2026-11-16)
+
+| What | Size | Plan |
+|---|---|---|
+| Raw bucket (`jetstream/`, 7-day expiry) | 41 GB | not copied: the new ingestor fills its own |
+| Warehouse `iceberg/` (bronze `jetstream` and 15 silver tables) | ~250 GB | re-written table by table |
+| Warehouse `lance/` (search index) | 415 GB | copied, or rebuilt (decide) |
+| Warehouse `reports/` | small | copied |
+| Warehouse `lance-test/` (scratch) | — | not copied |
+
+Copies within one region have no transfer charge, only request charges. Both accounts store the data during the overlap, about $15 a month for the duplicate 665 GB, prorated. The two clusters overlap too, at about $5 a day.
+
+**415 GB for 37M rows looks large.** That's about 11 KB a row, against about 2 KB of float16 vector. Check whether old versions or unmerged index files account for it before copying; it is also a monthly cost now.
+
+### Phase B: make the stacks account-neutral (code, no applies; done 2026-11-16)
+
+- **New stack name `main`** in all three projects (`Pulumi.main.yaml`). A second `dev` in the new backend would share `Pulumi.dev.yaml` with the old stacks, including image tags and the encryption salt. `StackReference`s default to the current stack's name, so they follow. The old `dev` stacks stay in the old backend until phase F destroys them.
+- **Data stack, `createBuckets`:**
+  - creates the raw and warehouse buckets instead of importing them, named from the account ID, with `protect` and `retain_on_delete` either way;
+  - adds a public access block on each new bucket;
+  - makes the notification and lifecycle resources refer to the bucket resources, so they wait for a created bucket;
+  - S3's defaults for a new bucket match the old buckets (unversioned, SSE-S3, ACLs disabled).
+  - Checked with mocks in a separate process, since the existing tests load the stack once with the old account's settings: the names come from the account ID, `.env`'s old names are ignored, and the notification targets the new raw bucket.
+- **Apps stack, stand-up switches:** `ingestReplicas`, `loaderReplicas` (0 or 1), `silverSuspend` and `reportsSuspend`, next to the existing `embedSuspend`, `labelsSuspend`, `indexSuspend` and `searchReplicas`. `Pulumi.main.yaml` starts everything stopped, with the `dev` stack's image tags.
+- **Alarms in the new account:** the embed and labels alarm actions start off. The ingest, loader and silver alarms will be in alarm while everything is stopped. The new SNS email subscription stays unconfirmed until phase D, so nothing is delivered before then.
+- **Budget:** stays in the data stack. In the new account it watches that account's spend. The old account's `bsky-monthly` covers the whole organization, since a management account's budget includes linked accounts. When phase F destroys the old data stack, recreate an organization-wide budget in the management account by hand.
+- **Nothing else is tied to the account.** In the cluster, the queue URL, account ID and locations come from stack outputs. On the laptop they come from `.env` (`BSKY_LOADER_QUEUE_URL`, `BSKY_AWS_ACCOUNT_ID`, bucket names), which switches to the new values at phase E.
+- **Not done in phase B, waiting on decisions:**
+  - the NAT instance (M1) in the new platform stack;
+  - the GitHub OIDC provider and CI role (D2). The developer inline policy already allows the provider by its exact ARN, so either can be added before or after phase C.
+### Phase C: stand up the new account, empty
+
+- **State backend first:** create `pulumi-state-<new account>-us-west-2-an` in the new account (by hand, like the original, since Pulumi can't create its own backend). Then `pulumi stack init main` in each project, with `PULUMI_BACKEND_URL` pointing at it and the same passphrase file.
+- Apply data → platform → apps in the new account with the `bsky-data-lake` profile, each after a preview and a yes.
+- **Apps stack:**
+  - **Nothing scheduled runs yet:** ingestor at 0 replicas, every CronJob suspended.
+  - **Images:** copy the current tags from the old ECR to the new one (for example `crane copy`), rather than rebuilding, so the same code runs.
+- **Cross-account read:** a bucket policy on the old warehouse bucket (old data stack, a Pulumi change in the management account) lets the new account's copy role read `iceberg/`, `lance/` and `reports/`. It is read-only, and removed in phase F.
+- **New EKS endpoint and kube context:** `BSKY_EKS_PUBLIC_CIDRS` and a new kubeconfig entry. The reports NLB gets a new URL, so tell the demo users.
+- **SNS:** confirm the new alert email subscription.
+- **Lance check:** copy `lance-test/` to the new warehouse and open it there with the search CLI. If it opens and answers queries, the relative-path assumption holds.
+
+### Phase D: start ingest in the new account (T0)
+
+- Scale the new ingestor to 1 and start the loader. The new bronze fills from T0.
+- **The old pipeline keeps running unchanged.** Both ingestors read Jetstream independently, so there is no gap and no shared state.
+- Watch the new account's `bsky-ingest-stalled` and loader alarms for a day.
+
+### Phase E: freeze, copy, switch (F, a few hours after T0)
+
+1. **Freeze the old downstream jobs:** suspend the old silver, embed, index, labels and reports CronJobs once each has finished its current run. The old ingestor and loader keep running.
+2. **Copy the tables:** run the copy job in the new cluster. It reads through the cross-account policy and writes the new account's tables.
+   - **Bronze `jetstream`:** rows with `received_at` up to T0 plus a margin.
+   - **Silver tables** in full, including `silver_runs` and the other jobs' state tables. `post_edges_backfill` is copied only if it's still needed (decide).
+3. **Copy or rebuild `lance/`,** plus `reports/inputs/`.
+4. **Check:** row counts per table and per day match between the accounts. Each job's state table shows the same watermark.
+5. **Set silver's start an hour before its copied watermark,** so new bronze rows near the freeze aren't skipped. Bronze `ingested_at` differs between the two loaders, so without the margin a few minutes could fall between them. Silver's anti-join on `event_id` drops the overlap, as it does for the ingestor's restart overlap.
+6. **Unsuspend the new CronJobs** in pipeline order: silver, embed, index, labels, reports. Each picks up from its copied watermark.
+7. **Stop the old ingestor and loader.**
+
+**Rollback until step 7:** unsuspend the old CronJobs. The old account has missed nothing, because its ingest never stopped.
+
+### Phase F: decommission the old account's workloads (about two weeks after E)
+
+- `pulumi destroy` the old apps and platform stacks, from the old backend.
+- Keep the old buckets read-only for the two weeks, then remove the cross-account policy and delete them. The data stack's `protect`/`retain_on_delete` means the old buckets are deleted by hand, on purpose.
+- Remove the old Glue databases, queues, alarms, log groups, ECR repository and the old state bucket.
+- Remove the old `BskyDataLakeDeveloper` assignment on the management account. The developer then has no workload access there.
+- The management account is left with only Organizations, IAM Identity Center, billing, the budget and CloudTrail (M4).
+
+### Decide
+
+- **`lance/`:** copy it (fast, if phase C's check passes), or rebuild from `post_embeddings` in the new account (about 8 h load plus 8 h reindex, but a clean dataset). Copying is the default.
+- **NAT:** start the new platform stack on the NAT instance (M1), or keep the managed gateway and change it later.
+- **`post_edges_backfill`:** copy it or drop it.
+- **Overlap length:** how long phase D runs before the freeze. A day is enough to trust the new ingest.
+
+### Acceptance
+
+- Every stack is deployed in the member account, and every job runs there on schedule, with its alarms.
+- Per-table row counts match across the freeze, and no day has a gap in silver.
+- Search, reports and the clustering inputs work from the new account.
+- The old workloads and buckets are deleted, and the management account holds only Organizations, IAM Identity Center, billing and CloudTrail.

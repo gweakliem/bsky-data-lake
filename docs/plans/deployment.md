@@ -105,6 +105,21 @@ The dev SSO role (`PowerUserAccess`) can't create IAM roles or policies, so `man
 - **Public-repo care:** the account ID and role ARN go in GitHub repository variables or secrets, never in the workflow file.
 - **Acceptance:** a merge to `main` produces SHA-tagged images in ECR, and a PR runs all test suites.
 
+## WP D7: deploy from GitHub Actions (backlog)
+
+- **Status: not started (raised 2026-11-16).** Today every image build, push and `pulumi up` runs from the developer's laptop with SSO credentials. D2 covers building images and running tests in CI. This WP covers deploying.
+- **Depends on:** D2 (its OIDC provider and the image workflow).
+- **Goal:** a merge to `main` builds, previews and, after approval, applies. Nothing routine needs the laptop.
+- **Pulumi from Actions:**
+  - One deploy role per stack (platform, data, apps), trusted through GitHub OIDC for this repository's `main` branch and a protected GitHub environment only. Each role is scoped to what its stack manages, under the same permissions boundary as the developer role (`infra/iam-bootstrap`).
+  - The Pulumi state backend and stack secrets passphrase are reachable from Actions. Check where state lives today before choosing how.
+  - On a PR, run `pulumi preview` for each stack whose code or config changed, and post the diff as a PR comment.
+  - On merge, run `pulumi up` in a GitHub environment with a required reviewer. That keeps the rule of previewing every apply and getting an explicit yes, with the approval click as the yes.
+- **Image tags:** apps stack config pins each image tag by hand today (for example `e3-20261114`). Choose between CI bumping the tag in config with a commit, and the stack reading the latest SHA-tagged image.
+- **Public-repo care:** as D2. The account ID, role ARNs and state URL go in repository or environment variables, never in workflow files. Fork PRs get no AWS credentials.
+- **Decide:** whether `iam-bootstrap` stays laptop-only, since it creates the roles CI would assume.
+- **Acceptance:** a merged change to the apps stack deploys through an approved workflow run, with no laptop step, and the run log shows the preview that was approved.
+
 ## WP D3: VPC and EKS cluster
 
 **Status: done (2026-10-31).** `infra/platform/`, cluster `bsky` on Kubernetes 1.37 with Auto Mode. The permissions boundary was enough for Auto Mode to launch nodes. Use a kubectl within one minor version of the server (an older client prints a skew warning).

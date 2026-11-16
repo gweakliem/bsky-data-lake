@@ -20,3 +20,4 @@ config:
   bsky-apps:indexSuspend: "true"
   bsky-apps:reportsSuspend: "true"
   bsky-apps:searchReplicas: "0"
+encryptionsalt: v1:O/LEWOFdOS0=:v1:c0cc0Jr0Us+9vUCY:+grEkgU9H0ygHzsziUvZwGB18UjnAA==

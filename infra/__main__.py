@@ -46,12 +46,17 @@ max_receive_count = config.get_int("maxReceiveCount") or 5
 manage_iam = config.get_bool("manageIam", True)
 # Iceberg tables in the raw database that Glue's table optimizers maintain.
 # The loader creates the tables, so add one here only once it exists.
-optimized_tables = config.get_object("optimizedTables") or ["jetstream"]
+# An empty list is honoured (a new account, before the tables exist), so check for None.
+optimized_tables = config.get_object("optimizedTables")
+if optimized_tables is None:
+    optimized_tables = ["jetstream"]
 # Likewise in the silver database: silver's TABLES plus its run log (silver/tables.py).
-optimized_silver_tables = config.get_object("optimizedSilverTables") or [
-    "posts", "likes", "reposts", "follows", "blocks", "profiles",
-    "identities", "accounts", "deletes", "rejects", "silver_runs",
-]
+optimized_silver_tables = config.get_object("optimizedSilverTables")
+if optimized_silver_tables is None:
+    optimized_silver_tables = [
+        "posts", "likes", "reposts", "follows", "blocks", "profiles",
+        "identities", "accounts", "deletes", "rejects", "silver_runs",
+    ]
 # Raw files are a replay source once loaded, so they expire.
 raw_retention_days = config.get_int("rawRetentionDays") or 7
 # Where alarms and budget alerts go. Kept out of committed config: it's personal.

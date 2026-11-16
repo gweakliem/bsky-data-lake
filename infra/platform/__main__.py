@@ -7,6 +7,7 @@ data stack (..), which this stack reads through a StackReference to associate
 them with Kubernetes service accounts.
 """
 
+import base64
 import json
 import os
 import sys
@@ -33,11 +34,28 @@ public_access_cidrs = config.get_object("publicAccessCidrs") or [
 if not public_access_cidrs:
     raise ValueError("set BSKY_EKS_PUBLIC_CIDRS in .env or `pulumi config set --path publicAccessCidrs[0] <cidr>`")
 
+# Outbound internet for the private subnets: "gateway" (the managed NAT gateway) or
+# "instance" (an fck-nat instance, WP M1: no per-GB charge, a few dollars a month).
+nat_mode = config.get("natMode") or "gateway"
+if nat_mode not in ("gateway", "instance"):
+    raise ValueError(f"natMode must be gateway or instance, not {nat_mode!r}")
+# Peak egress through the old gateway was 36 Mbit/s over a week (2026-11-09..15), p99 17,
+# average 2.7: t4g.nano's 32 Mbit/s baseline plus burst credits covers it.
+nat_instance_type = config.get("natInstanceType") or "t4g.nano"
+FCK_NAT_AMI_OWNER = "568608671756"  # fck-nat's published AMIs (https://fck-nat.dev/)
+
 data = pulumi.StackReference(config.get("dataStack") or f"organization/bsky-data-lake/{pulumi.get_stack()}")
 region = aws.get_region_output().region
 azs = aws.get_availability_zones_output(state="available").names
 
-# --- VPC: 2 AZs, one NAT gateway (cost over HA for dev) ---
+
+
+def _trust_ec2() -> str:
+    return json.dumps({"Version": "2012-10-17", "Statement": [
+        {"Effect": "Allow", "Principal": {"Service": "ec2.amazonaws.com"}, "Action": "sts:AssumeRole"}]})
+
+
+# --- VPC: 2 AZs, one NAT (a managed gateway or an fck-nat instance; cost over HA for dev) ---
 
 vpc = aws.ec2.Vpc(
     "bsky",
@@ -80,17 +98,118 @@ for i, (public_cidr, private_cidr) in enumerate([("10.20.0.0/20", "10.20.128.0/1
     )
 
 nat_eip = aws.ec2.Eip("nat", domain="vpc", tags={"Name": "bsky-nat"})
-nat = aws.ec2.NatGateway(
-    "bsky",
-    subnet_id=public_subnets[0].id,
-    allocation_id=nat_eip.id,
-    tags={"Name": "bsky"},
-    opts=pulumi.ResourceOptions(depends_on=[igw]),
-)
+nat = None
+if nat_mode == "gateway":
+    nat = aws.ec2.NatGateway(
+        "bsky",
+        subnet_id=public_subnets[0].id,
+        allocation_id=nat_eip.id,
+        tags={"Name": "bsky"},
+        opts=pulumi.ResourceOptions(depends_on=[igw]),
+    )
+    private_route = aws.ec2.RouteTableRouteArgs(cidr_block="0.0.0.0/0", nat_gateway_id=nat.id)
+else:
+    # One instance in an Auto Scaling group of one, so a failed instance is replaced.
+    # fck-nat at boot (/etc/fck-nat.conf):
+    #   eni_id: attaches the fixed interface, the private route's target, where
+    #           traffic from the VPC comes in;
+    #   eip_id: moves the Elastic IP onto the instance's own interface, which the
+    #           traffic leaves through (masqueraded); it also turns off that
+    #           interface's source/destination check.
+    # So a replacement takes over without route or egress-address changes.
+    # One zone, like the gateway was.
+    nat_sg = aws.ec2.SecurityGroup(
+        "nat",
+        name="bsky-nat",
+        description="fck-nat: forward anything from the VPC",
+        vpc_id=vpc.id,
+        ingress=[aws.ec2.SecurityGroupIngressArgs(protocol="-1", from_port=0, to_port=0, cidr_blocks=[vpc.cidr_block])],
+        egress=[aws.ec2.SecurityGroupEgressArgs(protocol="-1", from_port=0, to_port=0, cidr_blocks=["0.0.0.0/0"])],
+        tags={"Name": "bsky-nat"},
+    )
+    nat_eni = aws.ec2.NetworkInterface(
+        "nat",
+        subnet_id=public_subnets[0].id,
+        security_groups=[nat_sg.id],
+        source_dest_check=False,  # it forwards other hosts' traffic
+        description="bsky NAT: target of the private route",  # EC2 rejects apostrophes here
+        tags={"Name": "bsky-nat"},
+    )
+    nat_role = bsky_iam.role(
+        "nat",
+        name=f"{cluster_name}-nat",
+        description="fck-nat instance: attach the NAT interface; SSM for a shell",  # changing it needs iam:UpdateRoleDescription
+        assume_role_policy=_trust_ec2(),
+    )
+    aws.iam.RolePolicyAttachment(
+        "nat-ssm", role=nat_role.name, policy_arn="arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+    )
+    nat_eni_policy = aws.iam.RolePolicy(
+        "nat-eni",
+        role=nat_role.id,
+        policy=pulumi.Output.all(nat_eni.arn, nat_eip.arn).apply(lambda a: json.dumps({
+            "Version": "2012-10-17",
+            "Statement": [
+                {"Sid": "AttachTheNatInterface", "Effect": "Allow", "Action": "ec2:AttachNetworkInterface",
+                 "Resource": [a[0], "arn:aws:ec2:*:*:instance/*"]},
+                # Its own interface, whose ID it only learns at boot.
+                {"Sid": "OwnInterfaceSourceDestCheck", "Effect": "Allow",
+                 "Action": "ec2:ModifyNetworkInterfaceAttribute", "Resource": "arn:aws:ec2:*:*:network-interface/*"},
+                {"Sid": "TakeTheElasticIp", "Effect": "Allow", "Action": "ec2:AssociateAddress",
+                 "Resource": [a[1], "arn:aws:ec2:*:*:network-interface/*"]},
+                {"Effect": "Allow", "Action": "ec2:DescribeNetworkInterfaces", "Resource": "*"},
+            ],
+        })),
+    )
+    nat_profile = bsky_iam.instance_profile("nat", name=f"{cluster_name}-nat", role=nat_role.name)
+    nat_ami = aws.ec2.get_ami_output(
+        most_recent=True,
+        owners=[FCK_NAT_AMI_OWNER],
+        filters=[
+            aws.ec2.GetAmiFilterArgs(name="name", values=["fck-nat-al2023-*"]),
+            aws.ec2.GetAmiFilterArgs(name="architecture", values=["arm64"]),
+        ],
+    )
+    nat_template = aws.ec2.LaunchTemplate(
+        "nat",
+        name="bsky-nat",
+        image_id=nat_ami.id,
+        instance_type=nat_instance_type,
+        iam_instance_profile=aws.ec2.LaunchTemplateIamInstanceProfileArgs(arn=nat_profile.arn),
+        # A public address until fck-nat moves the Elastic IP onto this interface.
+        network_interfaces=[aws.ec2.LaunchTemplateNetworkInterfaceArgs(
+            device_index=0, associate_public_ip_address="true", security_groups=[nat_sg.id],
+        )],
+        metadata_options=aws.ec2.LaunchTemplateMetadataOptionsArgs(http_tokens="required", http_endpoint="enabled"),
+        user_data=pulumi.Output.all(nat_eni.id, nat_eip.allocation_id).apply(lambda a: base64.b64encode(
+            f"#!/bin/sh\n: > /etc/fck-nat.conf\necho 'eni_id={a[0]}' >> /etc/fck-nat.conf\n"
+            f"echo 'eip_id={a[1]}' >> /etc/fck-nat.conf\nservice fck-nat restart\n".encode()
+        ).decode()),
+        tag_specifications=[aws.ec2.LaunchTemplateTagSpecificationArgs(
+            resource_type="instance", tags={"Name": "bsky-nat", "project": "bsky-data-lake", "stack": "platform"},
+        )],
+        update_default_version=True,
+    )
+    nat_asg = aws.autoscaling.Group(
+        "nat",
+        name="bsky-nat",
+        min_size=1,
+        max_size=1,
+        desired_capacity=1,
+        vpc_zone_identifiers=[public_subnets[0].id],  # the fixed interface's zone
+        launch_template=aws.autoscaling.GroupLaunchTemplateArgs(id=nat_template.id, version="$Latest"),
+        health_check_type="EC2",
+        # A new AMI or instance type replaces the instance; the gap is a few minutes.
+        instance_refresh=aws.autoscaling.GroupInstanceRefreshArgs(
+            strategy="Rolling",
+            preferences=aws.autoscaling.GroupInstanceRefreshPreferencesArgs(min_healthy_percentage=0),
+        ),
+    )
+    private_route = aws.ec2.RouteTableRouteArgs(cidr_block="0.0.0.0/0", network_interface_id=nat_eni.id)
 private_rt = aws.ec2.RouteTable(
     "private",
     vpc_id=vpc.id,
-    routes=[aws.ec2.RouteTableRouteArgs(cidr_block="0.0.0.0/0", nat_gateway_id=nat.id)],
+    routes=[private_route],
     tags={"Name": "bsky-private"},
 )
 for i, subnet in enumerate(private_subnets):

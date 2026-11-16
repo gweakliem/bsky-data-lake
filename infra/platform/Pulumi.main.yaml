@@ -7,3 +7,6 @@ config:
       stack: platform
   # The public API endpoint's allowed CIDRs come from BSKY_EKS_PUBLIC_CIDRS in
   # the repo's .env, so the admin's address isn't committed.
+  # An fck-nat instance instead of the managed NAT gateway (WP M1).
+  bsky-platform:natMode: instance
+encryptionsalt: v1:eH57lb1H87A=:v1:Z9M5N8ggVL/yhrat:vSmHOcv1vVr1A7wxt1Psz1cHs/GlhA==

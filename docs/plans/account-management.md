@@ -159,6 +159,20 @@ Copies within one region have no transfer charge, only request charges. Both acc
 - **SNS:** confirm the new alert email subscription.
 - **Lance check:** copy `lance-test/` to the new warehouse and open it there with the search CLI. If it opens and answers queries, the relative-path assumption holds.
 
+- **Progress (2026-11-16):**
+  - **State bucket:** created, with versioning (old versions expire after 30 days), unlike the original. The `main` stacks are initialised in it.
+  - **Data stack applied:** 73 resources.
+  - **Platform stack applied:** 59 resources, with the fck-nat NAT instance (M1) instead of the managed gateway. Both EKS add-ons are active and `kubectl top` works. The kube context is `bsky-main`.
+  - **Images:** the 7 current tags are copied to the new ECR with `docker buildx imagetools create`.
+  - **Next:** the apps stack, the cross-account read policy on the old warehouse, and the Lance check.
+- **What the stand-up turned up:**
+  - **New-account EC2 validation:** a new account can't launch instances until AWS validates it (minutes, up to 4 hours, with an email). The first platform apply failed on the NAT instance and EKS add-ons until it cleared.
+  - **fck-nat's interfaces:** traffic comes in on the fixed interface (`eni_id`) and leaves masqueraded through the instance's own interface. fck-nat moves the Elastic IP there (`eip_id`) and turns off that interface's source/destination check, so its role needs `ec2:ModifyNetworkInterfaceAttribute` on network interfaces and `ec2:AssociateAddress` on the Elastic IP. With the Elastic IP on the fixed interface instead, return traffic was dropped and nothing in the private subnets reached the internet.
+  - **Instance profiles:** the developer policy needed `instance-profile/bsky/*` rights (`iam-bootstrap/developer-inline-policy.json`) before the NAT instance could have one.
+  - **Glue table optimizers** fail on tables that don't exist yet, so `main` starts with none (`optimizedTables: []`).
+  - **Changing a role's description** needs `iam:UpdateRoleDescription`, which the developer policy doesn't grant. Set descriptions right the first time.
+  - **EC2 interface descriptions** reject apostrophes.
+
 ### Phase D: start ingest in the new account (T0)
 
 - Scale the new ingestor to 1 and start the loader. The new bronze fills from T0.

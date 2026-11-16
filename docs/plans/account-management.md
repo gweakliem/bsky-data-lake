@@ -216,7 +216,7 @@ Run across a night, Mountain time: steps 1–3 in the evening, the copy while no
 
 ### Decide
 
-- ~~**`lance/`:** copy it or rebuild it.~~ Copy: phase C's check passed. Its 415 GB was mostly a day of old versions' index files; retention is now 2 hours (`1e818aa`).
+- ~~**`lance/`:** copy it or rebuild it.~~ Copy: phase C's check passed. Its 415 GB was mostly a day of old versions' index files; with 2 hours' retention (`1e818aa`) the first run took it to 154 GB in 1,903 objects (from 9,517), 2026-11-16 18:40Z.
 - ~~**NAT.**~~ The new platform stack runs the fck-nat instance (M1).
 - ~~**`post_edges_backfill`:** copy it or drop it.~~ Dropped: a temporary table.
 - ~~**Overlap length.**~~ About a day, then phase E across a night, Mountain time.

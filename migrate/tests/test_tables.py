@@ -140,16 +140,15 @@ def test_verify_flags_a_missing_partition(cats, tmp_path):
     assert not report["ok"] and len(report["missing"]) == 2
 
 
-def test_plan_lists_both_namespaces_and_needs_a_bronze_cutoff(cats):
+def test_plan_lists_both_namespaces_and_copies_all_of_bronze_by_default(cats):
     old, _ = cats
     source_table(old, "bsky_raw.jetstream", ["day", "hour"], days=1)
     source_table(old, "bsky_silver.posts", ["day"], days=1)
     source_table(old, "bsky_silver.post_edges_backfill", [], days=1)
-    with pytest.raises(SystemExit):
-        cli.build_plan(old, "new-bucket", None, ["lance/"], set())
-    plan = cli.build_plan(old, "new-bucket", "2026-11-20T12:00:00Z", ["lance/"], {"bsky_silver.post_edges_backfill"})
+    plan = cli.build_plan(old, "new-bucket", None, ["lance/"], {"bsky_silver.post_edges_backfill"})
     assert [e["identifier"] for e in plan["tables"]] == ["bsky_raw.jetstream", "bsky_silver.posts"]
-    assert plan["tables"][0]["before"] == ["received_at", "2026-11-20T12:00:00+00:00"]
-    assert plan["tables"][1]["before"] is None
+    assert all(e["before"] is None for e in plan["tables"])
+    cut = cli.build_plan(old, "new-bucket", "2026-11-20T12:00:00Z", ["lance/"], set())
+    assert cut["tables"][0]["before"] == ["received_at", "2026-11-20T12:00:00+00:00"]
     assert plan["dest_iceberg"] == "s3://new-bucket/iceberg"
     assert plan["objects"][0]["dest"] == "s3://new-bucket/lance/"

@@ -1,7 +1,7 @@
 """bsky-migrate: copy the lake into the member account (WP M5, phase E).
 
-    # On the laptop, with the old account's credentials, at the freeze:
-    bsky-migrate plan --dest-warehouse <new warehouse bucket> --bronze-before 2026-11-20T12:00:00Z > plan.json
+    # At the freeze (after the old silver's last run), on the laptop with the old account's credentials:
+    bsky-migrate plan --dest-warehouse <new warehouse bucket> --exclude bsky_silver.post_edges_backfill > plan.json
 
     # In the new account's cluster (the migration role), with plan.json mounted:
     bsky-migrate tables plan.json [--only bsky_silver.posts ...]
@@ -52,9 +52,7 @@ def build_plan(cat, dest_warehouse: str, bronze_before: str | None, object_prefi
             t = cat.load_table(ident)
             source_bucket = source_bucket or urlparse(t.metadata_location).netloc
             entry = {"identifier": name, "metadata_location": t.metadata_location, "before": None}
-            if name == BRONZE:
-                if not bronze_before:
-                    raise SystemExit("pass --bronze-before: when the new account's ingestor started (T0 plus a margin)")
+            if name == BRONZE and bronze_before:
                 entry["before"] = [BRONZE_TIME, tables.utc_iso(bronze_before)]
             entries.append(entry)
     if source_bucket is None:
@@ -121,7 +119,8 @@ def main(argv: list[str] | None = None) -> None:
     sub = p.add_subparsers(dest="cmd", required=True)
     pl = sub.add_parser("plan", help="write the plan (old account's credentials)")
     pl.add_argument("--dest-warehouse", required=True, help="the new account's warehouse bucket")
-    pl.add_argument("--bronze-before", help="copy bronze rows received before this ISO time (with a zone)")
+    pl.add_argument("--bronze-before", help="optional: copy only bronze rows received before this ISO time (with a zone); "
+                    "M5 copies all of bronze (migrate/CLAUDE.md)")
     pl.add_argument("--objects", nargs="*", default=list(DEFAULT_OBJECTS), help="warehouse prefixes to copy as objects")
     pl.add_argument("--exclude", nargs="*", default=[], help="tables to leave out, e.g. bsky_silver.post_edges_backfill")
     t = sub.add_parser("tables", help="copy the tables")

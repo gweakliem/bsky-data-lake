@@ -185,16 +185,23 @@ Copies within one region have no transfer charge, only request charges. Both acc
 - **The old pipeline keeps running unchanged.** Both ingestors read Jetstream independently, so there is no gap and no shared state.
 - Watch the new account's `bsky-ingest-stalled` and loader alarms for a day.
 
-### Phase E: freeze, copy, switch (F, a few hours after T0)
+### Phase E: freeze, copy overnight, switch (after about a day of phase D)
 
-1. **Freeze the old downstream jobs:** suspend the old silver, embed, index, labels and reports CronJobs once each has finished its current run. The old ingestor and loader keep running.
-2. **Copy the tables:** run the copy job in the new cluster. It reads through the cross-account policy and writes the new account's tables.
-   - **Bronze `jetstream`:** rows with `received_at` up to T0 plus a margin.
-   - **Silver tables** in full, including `silver_runs` and the other jobs' state tables. `post_edges_backfill` is copied only if it's still needed (decide).
-3. **Copy or rebuild `lance/`,** plus `reports/inputs/`.
-4. **Check:** row counts per table and per day match between the accounts. Each job's state table shows the same watermark.
-5. **Set silver's start an hour before its copied watermark,** so new bronze rows near the freeze aren't skipped. Bronze `ingested_at` differs between the two loaders, so without the margin a few minutes could fall between them. Silver's anti-join on `event_id` drops the overlap, as it does for the ingestor's restart overlap.
-6. **Unsuspend the new CronJobs** in pipeline order: silver, embed, index, labels, reports. Each picks up from its copied watermark.
+Run across a night, Mountain time: steps 1–3 in the evening, the copy while nobody's watching, steps 4–7 the next morning. The copy runs as Jobs in the new cluster; the laptop is only needed to start them.
+
+1. **Freeze the old downstream jobs** (`--context bsky-dev`): suspend the old silver, embed, index, labels and reports CronJobs once each has finished its current run. The old ingestor and loader keep running. Note the old silver's last `bronze_through` (W).
+2. **Write the plan** with the old account's credentials, right after the freeze: `bsky-migrate plan --dest-warehouse <new warehouse> --exclude bsky_silver.post_edges_backfill` (a temporary table, dropped). It pins each table's current metadata file. Then apply the new apps stack with `BSKY_MIGRATION_PLAN_FILE` set, which adds the migrate CronJobs.
+3. **Copy** (`migrate/CLAUDE.md`): start `migrate-tables` and `migrate-objects`. They write different prefixes, so they can run at the same time.
+   - **Tables:** every silver table, including `silver_runs` and the other jobs' state, and **all of bronze**, as of the plan (decided 2026-11-16).
+     - **Why no cut-off at T0:** silver's position is a bronze `ingested_at`. The two loaders stamp the same event minutes apart, so cutting bronze at T0 would lose the events stamped after W by the old loader and before W by the new one.
+     - **With all of bronze:** the new silver resumes at W and reads both copies of every later event, and its anti-join on `event_id` keeps one, as after any ingestor restart. Embed and index follow, since the new silver rows all come after W.
+     - **The cost:** bronze holds the T0-to-freeze day twice. Accepted while in development.
+   - **Objects:** `lance/` (smaller after the 2-hour version retention, `1e818aa`) and `reports/inputs/`.
+4. **Verify:** `migrate-verify` compares row counts per partition, and each job's state table shows the same position as the old one.
+5. **Switch the new data stack to running:**
+   - restore the optimizer lists (drop `optimizedTables: []` and `optimizedSilverTables: []` from `Pulumi.main.yaml`);
+   - turn on `embedAlarmActions`, `labelsAlarmActions` and `indexAlarmActions`.
+6. **Unsuspend the new CronJobs** in pipeline order: silver, embed, index, labels, reports; then search to 1 replica. Each continues from its copied position, with no adjustment.
 7. **Stop the old ingestor and loader.**
 
 **Rollback until step 7:** unsuspend the old CronJobs. The old account has missed nothing, because its ingest never stopped.
@@ -211,8 +218,8 @@ Copies within one region have no transfer charge, only request charges. Both acc
 
 - ~~**`lance/`:** copy it or rebuild it.~~ Copy: phase C's check passed. Still look at why it's 415 GB before copying.
 - **NAT:** start the new platform stack on the NAT instance (M1), or keep the managed gateway and change it later.
-- **`post_edges_backfill`:** copy it or drop it.
-- **Overlap length:** how long phase D runs before the freeze. A day is enough to trust the new ingest.
+- ~~**`post_edges_backfill`:** copy it or drop it.~~ Dropped: a temporary table.
+- ~~**Overlap length.**~~ About a day, then phase E across a night, Mountain time.
 
 ### Acceptance
 

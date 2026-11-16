@@ -1,0 +1,16 @@
+# The data lake's member account (WP M5, docs/plans/account-management.md).
+# Use the bsky-data-lake SSO profile and that account's state bucket.
+config:
+  aws:region: us-west-2
+  aws:defaultTags:
+    tags:
+      project: bsky-data-lake
+      stack: data
+  # Create the raw and warehouse buckets, named from this account's ID,
+  # instead of importing the original account's (ignores BSKY_BUCKET /
+  # BSKY_WAREHOUSE_BUCKET in .env).
+  bsky-data-lake:createBuckets: "true"
+  bsky-data-lake:manageIam: "true"
+  # Job alarms notify only once their CronJobs run (phase E of the move).
+  bsky-data-lake:embedAlarmActions: "false"
+  bsky-data-lake:labelsAlarmActions: "false"

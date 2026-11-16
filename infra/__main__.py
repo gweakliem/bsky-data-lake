@@ -1,10 +1,12 @@
 """AWS resources for the Bluesky data lake.
 
-The raw-file bucket and the warehouse bucket predate this stack. It adopts them
-(imported and protected, for their tags only) and never deletes them; it wires the raw bucket's ObjectCreated notifications to the
-queue the Iceberg loader consumes and creates the Glue database the raw
-Iceberg table lives in, located in the warehouse bucket. Athena's results
-bucket is the one bucket it creates.
+In the original account the raw-file bucket and the warehouse bucket predate
+this stack: it adopts them (imported and protected, for their tags only) and
+never deletes them. With `createBuckets` (a new account, WP M5) it creates them
+instead, named from the account ID like Athena's results bucket, and still never
+deletes them. It wires the raw bucket's ObjectCreated notifications to the queue
+the Iceberg loader consumes and creates the Glue database the raw Iceberg table
+lives in, located in the warehouse bucket.
 """
 
 import json
@@ -19,12 +21,22 @@ import bsky_iam
 load_dotenv(find_dotenv(usecwd=True))
 
 config = pulumi.Config()
-bucket = config.get("bucket") or os.environ.get("BSKY_BUCKET")
-if not bucket:
-    raise ValueError("set BSKY_BUCKET in .env or `pulumi config set bucket <name>`")
-warehouse_bucket = config.get("warehouseBucket") or os.environ.get("BSKY_WAREHOUSE_BUCKET")
-if not warehouse_bucket:
-    raise ValueError("set BSKY_WAREHOUSE_BUCKET in .env or `pulumi config set warehouseBucket <name>`")
+# Create the raw and warehouse buckets rather than import existing ones (a new account).
+# Their names then come from the account and region, in the account-regional namespace,
+# so .env's BSKY_BUCKET / BSKY_WAREHOUSE_BUCKET (which may name another account's) are ignored.
+create_buckets = config.get_bool("createBuckets", False)
+if create_buckets:
+    _account = aws.get_caller_identity().account_id
+    _region = aws.get_region().region
+    bucket = config.get("bucket") or f"bsky-data-drop-{_account}-{_region}-an"
+    warehouse_bucket = config.get("warehouseBucket") or f"bsky-processed-data-{_account}-{_region}-an"
+else:
+    bucket = config.get("bucket") or os.environ.get("BSKY_BUCKET")
+    if not bucket:
+        raise ValueError("set BSKY_BUCKET in .env or `pulumi config set bucket <name>`")
+    warehouse_bucket = config.get("warehouseBucket") or os.environ.get("BSKY_WAREHOUSE_BUCKET")
+    if not warehouse_bucket:
+        raise ValueError("set BSKY_WAREHOUSE_BUCKET in .env or `pulumi config set warehouseBucket <name>`")
 raw_prefix = (config.get("rawPrefix") or os.environ.get("BSKY_PREFIX") or "jetstream").strip("/") + "/"
 glue_database = config.get("glueDatabase") or "bsky_raw"
 silver_database_name = config.get("silverGlueDatabase") or "bsky_silver"
@@ -67,11 +79,13 @@ bucket_arn = f"arn:aws:s3:::{bucket}"
 warehouse_bucket_arn = f"arn:aws:s3:::{warehouse_bucket}"
 warehouse = f"s3://{warehouse_bucket}/iceberg"
 
-# --- The pre-existing buckets: adopted for cost-allocation tags only ---
+# --- The raw and warehouse buckets ---
 
-# Imported rather than created, protected, and kept if they ever leave the code.
+# Imported (the original account) or created (createBuckets), protected either way, and
+# kept if they ever leave the code: deleting one is a deliberate, manual step.
 # In provider v7 a Bucket is only the bucket and its tags; its notification and
-# lifecycle stay with their own resources below.
+# lifecycle stay with their own resources below. A new bucket gets S3's defaults,
+# which match the originals: unversioned, SSE-S3, ACLs disabled, public access blocked.
 existing_buckets = {
     component: aws.s3.Bucket(
         f"{component}-bucket",
@@ -79,10 +93,20 @@ existing_buckets = {
         # Like Athena's results bucket, they're in the account-regional namespace (-an).
         bucket_namespace="account-regional",
         tags={"component": component},
-        opts=pulumi.ResourceOptions(import_=name, protect=True, retain_on_delete=True),
+        opts=pulumi.ResourceOptions(import_=None if create_buckets else name, protect=True, retain_on_delete=True),
     )
     for component, name in {"raw": bucket, "warehouse": warehouse_bucket}.items()
 }
+if create_buckets:
+    for component, b in existing_buckets.items():
+        aws.s3.BucketPublicAccessBlock(
+            f"{component}-bucket",
+            bucket=b.bucket,
+            block_public_acls=True,
+            block_public_policy=True,
+            ignore_public_acls=True,
+            restrict_public_buckets=True,
+        )
 
 # --- SQS: S3 notifications for raw files, with a dead-letter queue ---
 
@@ -130,7 +154,7 @@ queue_policy = aws.sqs.QueuePolicy(
 # notification targets on the bucket must be added here too.
 notification = aws.s3.BucketNotification(
     "raw-files",
-    bucket=bucket,
+    bucket=existing_buckets["raw"].bucket,  # the resource, so a created bucket exists first
     queues=[
         aws.s3.BucketNotificationQueueArgs(
             queue_arn=queue.arn,
@@ -146,7 +170,7 @@ notification = aws.s3.BucketNotification(
 # Like the notification, this owns the bucket's entire lifecycle configuration.
 raw_lifecycle = aws.s3.BucketLifecycleConfiguration(
     "raw-files",
-    bucket=bucket,
+    bucket=existing_buckets["raw"].bucket,  # the resource, so a created bucket exists first
     rules=[
         aws.s3.BucketLifecycleConfigurationRuleArgs(
             id=f"expire-{prefix.strip('/')}",
@@ -176,7 +200,7 @@ raw_lifecycle = aws.s3.BucketLifecycleConfiguration(
 # S3 doesn't transition objects under 128 KB, so small metadata files stay in Standard.
 warehouse_lifecycle = aws.s3.BucketLifecycleConfiguration(
     "warehouse",
-    bucket=warehouse_bucket,
+    bucket=existing_buckets["warehouse"].bucket,  # the resource, so a created bucket exists first
     rules=[
         aws.s3.BucketLifecycleConfigurationRuleArgs(
             id="iceberg-intelligent-tiering",

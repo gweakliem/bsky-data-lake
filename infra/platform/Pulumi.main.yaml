@@ -1,0 +1,9 @@
+# The data lake's member account (WP M5, docs/plans/account-management.md).
+config:
+  aws:region: us-west-2
+  aws:defaultTags:
+    tags:
+      project: bsky-data-lake
+      stack: platform
+  # The public API endpoint's allowed CIDRs come from BSKY_EKS_PUBLIC_CIDRS in
+  # the repo's .env, so the admin's address isn't committed.

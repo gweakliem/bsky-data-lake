@@ -21,6 +21,16 @@ platform = pulumi.StackReference(config.get("platformStack") or f"organization/b
 region = config.get("region") or "us-west-2"
 loader_image_tag = config.require("loaderImageTag")
 ingest_image_tag = config.require("ingestImageTag")
+# Stand-up switches for a new account (WP M5): everything is deployed but nothing
+# writes until the cut-over turns it on. embedSuspend, labelsSuspend and indexSuspend
+# work the same way and default to suspended; these default to running.
+ingest_replicas = config.get_int("ingestReplicas", 1)
+loader_replicas = config.get_int("loaderReplicas", 1)
+silver_suspend = config.get_bool("silverSuspend", False)
+reports_suspend = config.get_bool("reportsSuspend", False)
+for _name, _n in (("ingestReplicas", ingest_replicas), ("loaderReplicas", loader_replicas)):
+    if _n not in (0, 1):
+        raise ValueError(f"{_name} must be 0 or 1: a second copy writes every event twice or races on commits")
 
 # ConfigMaps and Secrets update in place. By default the provider replaces one
 # whose data changes, and with fixed names the create-before-delete replacement
@@ -71,7 +81,7 @@ loader = k8s.apps.v1.Deployment(
     "iceberg-loader",
     metadata=k8s.meta.v1.ObjectMetaArgs(name="iceberg-loader", namespace=ns, labels=loader_labels),
     spec=k8s.apps.v1.DeploymentSpecArgs(
-        replicas=1,
+        replicas=loader_replicas,
         # Two loaders would only race on Iceberg commits; SQS redelivery makes a
         # short gap during a deploy harmless.
         strategy=k8s.apps.v1.DeploymentStrategyArgs(type="Recreate"),
@@ -133,7 +143,7 @@ ingestor = k8s.apps.v1.Deployment(
     "ingestor",
     metadata=k8s.meta.v1.ObjectMetaArgs(name="ingestor", namespace=ns, labels=ingestor_labels),
     spec=k8s.apps.v1.DeploymentSpecArgs(
-        replicas=1,
+        replicas=ingest_replicas,
         # Two ingestors would write every event twice.
         strategy=k8s.apps.v1.DeploymentStrategyArgs(type="Recreate"),
         selector=k8s.meta.v1.LabelSelectorArgs(match_labels=ingestor_labels),
@@ -203,6 +213,7 @@ silver = k8s.batch.v1.CronJob(
     "silver",
     metadata=k8s.meta.v1.ObjectMetaArgs(name="silver", namespace=ns, labels=silver_labels),
     spec=k8s.batch.v1.CronJobSpecArgs(
+        suspend=True if silver_suspend else None,  # unset rather than false: no diff on running stacks
         # :05, after the loader's commits for the previous hour have settled.
         schedule="5 * * * *",
         time_zone="Etc/UTC",
@@ -697,6 +708,7 @@ reports_build = k8s.batch.v1.CronJob(
     "reports",
     metadata=k8s.meta.v1.ObjectMetaArgs(name="reports", namespace=ns, labels=reports_labels),
     spec=k8s.batch.v1.CronJobSpecArgs(
+        suspend=True if reports_suspend else None,
         # :30, after silver's :05 run has caught up (about 5 minutes when it isn't behind).
         schedule="30 * * * *",
         time_zone="Etc/UTC",

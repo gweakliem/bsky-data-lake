@@ -1,0 +1,22 @@
+# The data lake's member account (WP M5, docs/plans/account-management.md).
+# Image tags match the dev stack's; the images are copied into this account's ECR.
+# Everything starts stopped: the cut-over (phases D and E) turns it on in order.
+config:
+  bsky-apps:loaderImageTag: "03cb7e6"
+  bsky-apps:ingestImageTag: a287294
+  bsky-apps:silverImageTag: 36b7137
+  bsky-apps:reportsImageTag: b9e249c
+  bsky-apps:labelsImageTag: 00c3b94-labels
+  bsky-apps:embedImageTag: 04481b5
+  bsky-apps:searchImageTag: e3-20261114
+  bsky-apps:reportsMemoryLimit: 12Gi
+  bsky-apps:reportsDuckdbMemory: 10GB
+  bsky-apps:indexMemoryLimit: 12Gi
+  bsky-apps:ingestReplicas: "0"
+  bsky-apps:loaderReplicas: "0"
+  bsky-apps:silverSuspend: "true"
+  bsky-apps:embedSuspend: "true"
+  bsky-apps:labelsSuspend: "true"
+  bsky-apps:indexSuspend: "true"
+  bsky-apps:reportsSuspend: "true"
+  bsky-apps:searchReplicas: "0"

@@ -79,7 +79,7 @@ The account budget `bsky-monthly` is $250 (deployment plan, D6).
 
 ## WP M5: move the workloads out of the management account
 
-- **Status: in progress (2026-11-16). Option 2 chosen:** a member account for the data lake. Phase A is done. Phases B–F are planned below and nothing has moved yet.
+- **Status: in progress (2026-11-16). Option 2 chosen:** a member account for the data lake. Phases A–C are done. Phase D (the new account ingesting alongside the old) has run since T0, 2026-11-16 17:34Z. Phase E (freeze, copy, switch) is planned for the evening of 2026-11-17, Mountain time. Nothing has been copied yet, and the old pipeline still runs unchanged.
 - **Why:** the data lake runs in the AWS Organization's management account, the account that owns the organization and pays the bill. AWS recommends keeping the management account free of workloads:
   - Service control policies (SCPs, the organization-wide guardrails) don't apply to the management account, so they can't limit what its roles do.
   - A credential leaked from a workload in the management account sits next to control of the whole organization: accounts, billing and IAM Identity Center.
@@ -105,7 +105,7 @@ The account budget `bsky-monthly` is $250 (deployment plan, D6).
   - the boundary `bsky-workload-boundary`;
   - a separate permission set `BskyDataLakeDeveloper-Workloads` (`PowerUserAccess` plus the inline policy rendered for the new account), since the existing permission set's inline policy names the management account's ID.
 - Verified with the new developer profile: creating a role under `/bsky/` with the boundary succeeds. Creating one without the boundary, creating one outside `/bsky/`, removing a role's boundary and editing the boundary are all denied.
-- A temporary `AdministratorAccess` assignment on the new account was used for the bootstrap. Remove it when phase A is closed.
+- A temporary `AdministratorAccess` assignment on the new account was used for the bootstrap. **Removed 2026-11-16 (verified).** A local SSO profile that asks for `AdministratorAccess` now signs in but gets `ForbiddenException: No access`. Re-assign the permission set in Identity Center for a one-off admin task, then remove it again. Day-to-day work uses `BskyDataLakeDeveloper-Workloads`.
 - **Still to confirm in the console:** SCP attached; root access management on; billing access for IAM activated (M3 step 1); cost allocation tags `project`, `stack` and `component` active.
 
 ### What can't simply be copied
@@ -114,7 +114,7 @@ The account budget `bsky-monthly` is $250 (deployment plan, D6).
 - **Iceberg metadata holds absolute paths.** Every metadata file, manifest list and manifest names its files as `s3://<warehouse>/iceberg/...`. Copying the objects into a bucket with a new name leaves tables pointing at the old bucket.
   - Iceberg's `rewrite_table_path` procedure fixes this, but it needs Spark with Iceberg 1.8 or later, and Sail can't run `CALL`.
   - **So tables are re-written, not copied.** A copy job reads each old table and appends its rows to a new table of the same schema and partitioning in the new account, day by day. Snapshot history isn't carried over, which nothing here needs. Every row keeps its values, including `event_id`, `bronze_ingested_at` and the run-state tables' watermarks.
-- **Lance stores relative paths** inside a dataset (to verify, see phase C), so the search index can be copied as plain objects.
+- **Lance stores relative paths** inside a dataset (verified in phase C), so the search index can be copied as plain objects.
 - **EKS, VPC, NAT, IAM roles, queues, alarms and log groups** are created fresh from the stacks. Nothing is moved.
 
 ### Sizes (2026-11-16)
@@ -123,13 +123,15 @@ The account budget `bsky-monthly` is $250 (deployment plan, D6).
 |---|---|---|
 | Raw bucket (`jetstream/`, 7-day expiry) | 41 GB | not copied: the new ingestor fills its own |
 | Warehouse `iceberg/` (bronze `jetstream` and 15 silver tables) | ~250 GB | re-written table by table |
-| Warehouse `lance/` (search index) | 415 GB | copied, or rebuilt (decide) |
+| Warehouse `lance/` (search index) | 415 GB, 154 GB after the version cleanup | copied |
 | Warehouse `reports/` | small | copied |
 | Warehouse `lance-test/` (scratch) | — | not copied |
 
 Copies within one region have no transfer charge, only request charges. Both accounts store the data during the overlap, about $15 a month for the duplicate 665 GB, prorated. The two clusters overlap too, at about $5 a day.
 
-**415 GB for 37M rows looks large.** That's about 11 KB a row, against about 2 KB of float16 vector. Check whether old versions or unmerged index files account for it before copying; it is also a monthly cost now.
+With `lance/` at 154 GB, the duplicate is about 400 GB, roughly $9 a month while both accounts hold it.
+
+~~**415 GB for 37M rows looks large.**~~ Resolved: most of it was unreferenced index files from old versions (264 of 274 GB of index files). With 2 hours' version retention (`1e818aa`), `lance/` went to 154 GB.
 
 ### Phase B: make the stacks account-neutral (code, no applies; done 2026-11-16)
 
@@ -145,7 +147,7 @@ Copies within one region have no transfer charge, only request charges. Both acc
 - **Budget:** stays in the data stack. In the new account it watches that account's spend. The old account's `bsky-monthly` covers the whole organization, since a management account's budget includes linked accounts. When phase F destroys the old data stack, recreate an organization-wide budget in the management account by hand.
 - **Nothing else is tied to the account.** In the cluster, the queue URL, account ID and locations come from stack outputs. On the laptop they come from `.env` (`BSKY_LOADER_QUEUE_URL`, `BSKY_AWS_ACCOUNT_ID`, bucket names), which switches to the new values at phase E.
 - **Not done in phase B, waiting on decisions:**
-  - the NAT instance (M1) in the new platform stack;
+  - ~~the NAT instance (M1) in the new platform stack;~~ added in phase C;
   - the GitHub OIDC provider and CI role (D2). The developer inline policy already allows the provider by its exact ARN, so either can be added before or after phase C.
 ### Phase C: stand up the new account, empty
 
@@ -169,8 +171,6 @@ Copies within one region have no transfer charge, only request charges. Both acc
   - **Lance check passed:** `lance-test/` (89 objects, 552 MB) copied in 4 s and opened in the new bucket with the same rows (105,221), version, 6 indexes and query results. So `lance/` is copied, not rebuilt.
   - **Old tables (2026-11-16):** no delete files; one partition spec and one schema each. Bronze is partitioned by `day` and `hour`, silver by `day`; `silver_runs` and `post_edges_backfill` are unpartitioned.
   - **Copy job deployed:** the platform's `bsky/migrate` repository and Pod Identity association are applied, and the image is pushed (`a706bb7`, amd64 and arm64).
-- **Phase D started 2026-11-16: T0 = 17:34:44 UTC,** when the new ingestor connected (live, no file to resume from). The loader creates `bsky_raw.jetstream` in the new catalog.
-- **SNS confirmed 2026-11-16, in phase D.** CloudWatch notifies only on a state change, so alarms already in ALARM before the subscription (silver stalled; embed, index and labels with actions off) send nothing until they recover and fire again. Confirm within 3 days of the data stack's apply, or the link expires.
 - **What the stand-up turned up:**
   - **New-account EC2 validation:** a new account can't launch instances until AWS validates it (minutes, up to 4 hours, with an email). The first platform apply failed on the NAT instance and EKS add-ons until it cleared.
   - **fck-nat's interfaces:** traffic comes in on the fixed interface (`eni_id`) and leaves masqueraded through the instance's own interface. fck-nat moves the Elastic IP there (`eip_id`) and turns off that interface's source/destination check, so its role needs `ec2:ModifyNetworkInterfaceAttribute` on network interfaces and `ec2:AssociateAddress` on the Elastic IP. With the Elastic IP on the fixed interface instead, return traffic was dropped and nothing in the private subnets reached the internet.
@@ -184,6 +184,11 @@ Copies within one region have no transfer charge, only request charges. Both acc
 - Scale the new ingestor to 1 and start the loader. The new bronze fills from T0.
 - **The old pipeline keeps running unchanged.** Both ingestors read Jetstream independently, so there is no gap and no shared state.
 - Watch the new account's `bsky-ingest-stalled` and loader alarms for a day.
+
+- **Progress:**
+  - **Started 2026-11-16: T0 = 17:34:44 UTC,** when the new ingestor connected (live, no file to resume from). The first raw file and bronze commit arrived by 17:38Z. The loader created `bsky_raw.jetstream` in the new catalog.
+  - **SNS confirmed 2026-11-16.** CloudWatch notifies only on a state change. Alarms that were already in ALARM before the subscription (silver stalled; embed, index and labels with actions off) send nothing until they recover and fire again.
+  - **Check at 2026-11-17 01:18Z (T0 + 7¾ h):** in `bsky-main`, the ingestor and loader had run 7h43m with no restarts. The loader was appending one 16–17 MB file to `bsky_raw.jetstream` about every 4 minutes, with none already loaded.
 
 ### Phase E: freeze, copy overnight, switch (after about a day of phase D)
 

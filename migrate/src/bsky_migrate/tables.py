@@ -11,6 +11,13 @@ The last commit of each partition carries MARK in its snapshot summary, so a
 rerun skips finished partitions; a partition left half-copied by a crash has
 no mark, and its rows are deleted before it is copied again.
 
+`live` is for a destination that something else also writes: M5's bronze,
+which the new account's loader has appended to since T0. There an unmarked
+partition holds the loader's rows, not a crashed copy's, so nothing is
+deleted. A crash mid-partition then leaves duplicates, which silver's
+anti-join on `event_id` drops. (Without this, a run deleted the new loader's
+rows from every hour after T0, 2026-11-18.)
+
 `before` (column, ISO timestamp) keeps only earlier rows: bronze up to the
 moment the new account's ingestor started.
 """
@@ -28,6 +35,7 @@ import pyarrow as pa
 from pyiceberg.catalog import Catalog
 from pyiceberg.exceptions import CommitFailedException
 from pyiceberg.expressions import AlwaysTrue, And, BooleanExpression, EqualTo, LessThan
+from pyiceberg.io.pyarrow import ArrowScan
 from pyiceberg.table import StaticTable, Table
 from pyiceberg.transforms import IdentityTransform
 
@@ -145,8 +153,21 @@ def _commits(batches: Iterator[pa.RecordBatch], rows_per_commit: int) -> Iterato
         yield ready, True
 
 
+def read(source: Table, row_filter: BooleanExpression) -> Iterator[pa.RecordBatch]:
+    """The rows matching row_filter, one data file at a time.
+
+    Not `scan().to_arrow_batch_reader()`: pyiceberg 0.12 hands every file of the scan to its
+    thread pool at once and each task reads its whole file, so finished files pile up ahead of
+    a slower writer. A 44M-row day of likes (21 files) went past 16 Gi that way (2026-11-18).
+    """
+    scan = source.scan(row_filter=row_filter)
+    reader = ArrowScan(source.metadata, source.io, scan.projection(), scan.row_filter, scan.case_sensitive)
+    for task in scan.plan_files():
+        yield from reader.to_record_batches([task])
+
+
 def copy_table(source: Table, dest: Table, before: tuple[str, str] | None = None,
-               rows_per_commit: int = ROWS_PER_COMMIT) -> Result:
+               rows_per_commit: int = ROWS_PER_COMMIT, live: bool = False) -> Result:
     t0 = time.monotonic()
     done = finished(dest)
     parts = partitions(source)
@@ -158,11 +179,12 @@ def copy_table(source: Table, dest: Table, before: tuple[str, str] | None = None
             continue
         f = row_filter(p, before)
         # Rows from a crashed attempt at this partition (no mark): drop them, then copy again.
-        if p and dest.current_snapshot() is not None and dest.scan(row_filter=row_filter(p)).plan_files():
+        # Not in a live table, where they are another writer's rows.
+        if p and not live and dest.current_snapshot() is not None and dest.scan(row_filter=row_filter(p)).plan_files():
             log.info("%s %s: clearing a partial copy", dest.name(), k)
             dest.delete(row_filter(p))
         n = 0
-        for chunk, last in _commits(source.scan(row_filter=f).to_arrow_batch_reader(), rows_per_commit):
+        for chunk, last in _commits(read(source, f), rows_per_commit):
             _append(dest, chunk, {MARK: k} if last else {})
             n += chunk.num_rows
         rows += n
@@ -185,8 +207,9 @@ def counts(table: Table) -> dict[str, int]:
             for row, n in zip(t.column("partition").to_pylist(), t.column("record_count").to_pylist())}
 
 
-def compare(source: Table, dest: Table, before: tuple[str, str] | None = None) -> dict:
-    """Per-partition row counts. With `before`, partitions may hold fewer rows in the destination."""
+def compare(source: Table, dest: Table, before: tuple[str, str] | None = None, live: bool = False) -> dict:
+    """Per-partition row counts. With `before`, partitions may hold fewer rows in the destination;
+    in a `live` destination (another writer's rows, duplicates from a crash), more, never fewer."""
     src, dst = counts(source), counts(dest)
     missing = sorted(k for k in src if src[k] and k not in dst)
     differ = {k: (src[k], dst[k]) for k in src if k in dst and src[k] != dst[k]}
@@ -195,6 +218,9 @@ def compare(source: Table, dest: Table, before: tuple[str, str] | None = None) -
         bad = {k: v for k, v in differ.items() if v[1] > v[0]}
         fewer = len(differ) - len(bad) + len(missing)
         missing = []
+    elif live:
+        bad = {k: v for k, v in differ.items() if v[1] < v[0]}
+        fewer = 0
     else:
         bad, fewer = differ, 0
     return {"source_rows": sum(src.values()), "dest_rows": sum(dst.values()), "partitions": len(src),

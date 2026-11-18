@@ -3,6 +3,7 @@ import datetime as dt
 import pyarrow as pa
 import pytest
 from pyiceberg.catalog.sql import SqlCatalog
+from pyiceberg.expressions import AlwaysTrue
 from pyiceberg.partitioning import PartitionField, PartitionSpec
 from pyiceberg.schema import Schema
 from pyiceberg.transforms import IdentityTransform
@@ -152,3 +153,50 @@ def test_plan_lists_both_namespaces_and_copies_all_of_bronze_by_default(cats):
     assert cut["tables"][0]["before"] == ["received_at", "2026-11-20T12:00:00+00:00"]
     assert plan["dest_iceberg"] == "s3://new-bucket/iceberg"
     assert plan["objects"][0]["dest"] == "s3://new-bucket/lance/"
+
+
+def test_bronze_keeps_the_new_loaders_rows(cats, tmp_path):
+    # M5: the new account's loader appends to the destination bronze. Its rows sit in partitions
+    # the copy hasn't marked, and a copy that "cleared" them deleted them (2026-11-18).
+    old, new = cats
+    src = source_table(old, "bsky_raw.jetstream", ["day", "hour"], days=2)
+    source = tables.open_source(src.metadata_location)
+    dest = tables.ensure_destination(source, new, "bsky_raw.jetstream", f"file://{tmp_path}/new/wh/bsky_raw/jetstream")
+    loader = rows(dt.date(2026, 11, 2), 3).set_column(0, "event_id", pa.array(["new-a", "new-b", "new-c"]))
+    dest.append(loader)
+    plan = {"dest_iceberg": f"file://{tmp_path}/new/wh",
+            "tables": [{"identifier": "bsky_raw.jetstream", "metadata_location": src.metadata_location, "before": None}]}
+    cli.run_tables(plan, set(), 1000, cat=new)
+    got = sorted_ids(new.load_table("bsky_raw.jetstream"))
+    assert {"new-a", "new-b", "new-c"} <= set(got)
+    assert sorted(i for i in got if not i.startswith("new-")) == sorted_ids(src)
+    report = cli.run_verify(plan, cat=new)["bsky_raw.jetstream"]
+    assert report["ok"] and report["dest_rows"] == report["source_rows"] + 3
+
+
+def test_verify_of_live_bronze_flags_fewer_rows(cats, tmp_path):
+    old, new = cats
+    src = source_table(old, "bsky_raw.jetstream", ["day", "hour"], days=1)
+    source = tables.open_source(src.metadata_location)
+    dest = tables.ensure_destination(source, new, "bsky_raw.jetstream", f"file://{tmp_path}/new/wh/jetstream")
+    dest.append(rows(dt.date(2026, 11, 1), 4))
+    report = tables.compare(source, new.load_table("bsky_raw.jetstream"), live=True)
+    assert not report["ok"] and report["mismatched"]
+
+
+def test_read_hands_the_reader_one_file_at_a_time(cats, monkeypatch):
+    old, _ = cats
+    src = source_table(old, "bsky_silver.likes", ["day"], days=1)  # two files in the one partition
+    seen = []
+    real = tables.ArrowScan.to_record_batches
+
+    def spy(self, tasks):
+        tasks = list(tasks)
+        seen.append(len(tasks))
+        return real(self, tasks)
+
+    monkeypatch.setattr(tables.ArrowScan, "to_record_batches", spy)
+    source = tables.open_source(src.metadata_location)
+    got = pa.Table.from_batches(list(tables.read(source, AlwaysTrue())))
+    assert seen == [1, 1]
+    assert sorted(got["event_id"].to_pylist()) == sorted_ids(src)

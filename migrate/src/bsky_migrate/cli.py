@@ -69,6 +69,11 @@ def _io_properties() -> dict[str, str]:
     return {"client.region": os.environ.get("AWS_REGION", "us-west-2")}
 
 
+def _live(identifier: str, before) -> bool:
+    """Bronze copied in full lands in the table the new account's loader writes (migrate/CLAUDE.md)."""
+    return identifier == BRONZE and not before
+
+
 def run_tables(plan: dict, only: set[str], rows_per_commit: int, cat=None) -> list[dict]:
     cat = cat or _catalog()
     out = []
@@ -79,7 +84,7 @@ def run_tables(plan: dict, only: set[str], rows_per_commit: int, cat=None) -> li
         source = tables.open_source(e["metadata_location"], _io_properties())
         dest = tables.ensure_destination(source, cat, e["identifier"], f"{plan['dest_iceberg']}/{ns}/{name}")
         before = tuple(e["before"]) if e.get("before") else None
-        r = tables.copy_table(source, dest, before, rows_per_commit)
+        r = tables.copy_table(source, dest, before, rows_per_commit, live=_live(e["identifier"], before))
         log.info("table %s", json.dumps(dataclasses.asdict(r)))
         out.append(dataclasses.asdict(r))
     return out
@@ -109,7 +114,7 @@ def run_verify(plan: dict, cat=None) -> dict:
             report[e["identifier"]] = {"ok": False, "error": repr(exc)}
             continue
         before = tuple(e["before"]) if e.get("before") else None
-        report[e["identifier"]] = tables.compare(source, dest, before)
+        report[e["identifier"]] = tables.compare(source, dest, before, live=_live(e["identifier"], before))
     return report
 
 

@@ -13,4 +13,6 @@ config:
   bsky-data-lake:manageIam: "true"
   bsky-data-lake:embedAlarmActions: "true"
   bsky-data-lake:labelsAlarmActions: "true"
+  # WP M5: the new account (ID in .env) may read the warehouse until phase F.
+  bsky-data-lake:migrationReadPolicy: "true"
 encryptionsalt: v1:DK4jAg2SzZc=:v1:k8MlwSJH+6h4fdUQ:irUSNmDlRrnaOAiu7pe2/2yl+k5q+A==

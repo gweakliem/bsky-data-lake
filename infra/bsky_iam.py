@@ -2,8 +2,8 @@
 
 The dev SSO role may only create roles and policies under IAM_PATH, and roles
 only with the bsky-workload-boundary permissions boundary attached (see
-iam-bootstrap/). Every Role and Policy in these stacks goes through here so
-that can't be missed; test_infra.py checks it.
+iam-bootstrap/). Every Role, Policy and InstanceProfile in these stacks goes
+through here so that can't be missed; test_infra.py checks it.
 """
 
 import functools
@@ -35,3 +35,10 @@ def policy(resource_name: str, opts: pulumi.ResourceOptions | None = None, **kwa
     if "path" in kwargs:
         raise ValueError("bsky_iam.policy sets path itself")
     return aws.iam.Policy(resource_name, path=IAM_PATH, opts=opts, **kwargs)
+
+
+def instance_profile(resource_name: str, opts: pulumi.ResourceOptions | None = None, **kwargs) -> aws.iam.InstanceProfile:
+    """An EC2 instance profile under IAM_PATH, for one of the project's roles."""
+    if "path" in kwargs:
+        raise ValueError("bsky_iam.instance_profile sets path itself")
+    return aws.iam.InstanceProfile(resource_name, path=IAM_PATH, opts=opts, **kwargs)

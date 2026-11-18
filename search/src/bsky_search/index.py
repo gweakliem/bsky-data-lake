@@ -327,6 +327,13 @@ def record(db: lancedb.DBConnection, through: dt.datetime, appended: int, delete
         db.create_table(store.RUNS, row)
 
 
+# Each hourly run rewrites or merges the indexes into new files, so every version kept holds
+# its own set: at a day's retention 419 versions held 264 GB of unreferenced index files
+# next to 136 GB of data (2026-11-16). The API reopens the dataset every minute
+# (read_consistency_interval) and is the only other reader, so two hours is ample.
+VERSION_RETENTION = dt.timedelta(hours=2)
+
+
 def maintain(table, reindex: bool = False) -> None:
     """Create missing indexes, fold new rows into existing ones, compact, and drop old versions."""
     names = {i.columns[0]: i.index_type for i in table.list_indices()}
@@ -340,8 +347,8 @@ def maintain(table, reindex: bool = False) -> None:
         # k-means trains on sample_rate rows per partition: 64 keeps it to about 0.8 GB of float16 at 37M rows (256 is 4x).
         table.create_index("vector", config=IvfPq(distance_type="cosine", num_partitions=partitions,
                                                   num_sub_vectors=SUB_VECTORS, sample_rate=TRAIN_SAMPLE_RATE))
-    # Compaction, new rows into every index, and versions older than a day (a reader may still hold one).
-    table.optimize(cleanup_older_than=dt.timedelta(days=1))
+    # Compaction, new rows into every index, and versions older than VERSION_RETENTION.
+    table.optimize(cleanup_older_than=VERSION_RETENTION)
     merge_vector_deltas(table)
 
 

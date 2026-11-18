@@ -54,6 +54,20 @@
       "Resource": "arn:aws:iam::<ACCOUNT_ID>:policy/bsky/*"
     },
     {
+      "Sid": "ManageProjectInstanceProfiles",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateInstanceProfile",
+        "iam:DeleteInstanceProfile",
+        "iam:GetInstanceProfile",
+        "iam:TagInstanceProfile",
+        "iam:UntagInstanceProfile",
+        "iam:AddRoleToInstanceProfile",
+        "iam:RemoveRoleFromInstanceProfile"
+      ],
+      "Resource": "arn:aws:iam::<ACCOUNT_ID>:instance-profile/bsky/*"
+    },
+    {
       "Sid": "GitHubOidcProviderOnly",
       "Effect": "Allow",
       "Action": [

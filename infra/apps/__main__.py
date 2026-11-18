@@ -21,6 +21,16 @@ platform = pulumi.StackReference(config.get("platformStack") or f"organization/b
 region = config.get("region") or "us-west-2"
 loader_image_tag = config.require("loaderImageTag")
 ingest_image_tag = config.require("ingestImageTag")
+# Stand-up switches for a new account (WP M5): everything is deployed but nothing
+# writes until the cut-over turns it on. embedSuspend, labelsSuspend and indexSuspend
+# work the same way and default to suspended; these default to running.
+ingest_replicas = config.get_int("ingestReplicas", 1)
+loader_replicas = config.get_int("loaderReplicas", 1)
+silver_suspend = config.get_bool("silverSuspend", False)
+reports_suspend = config.get_bool("reportsSuspend", False)
+for _name, _n in (("ingestReplicas", ingest_replicas), ("loaderReplicas", loader_replicas)):
+    if _n not in (0, 1):
+        raise ValueError(f"{_name} must be 0 or 1: a second copy writes every event twice or races on commits")
 
 # ConfigMaps and Secrets update in place. By default the provider replaces one
 # whose data changes, and with fixed names the create-before-delete replacement
@@ -71,7 +81,7 @@ loader = k8s.apps.v1.Deployment(
     "iceberg-loader",
     metadata=k8s.meta.v1.ObjectMetaArgs(name="iceberg-loader", namespace=ns, labels=loader_labels),
     spec=k8s.apps.v1.DeploymentSpecArgs(
-        replicas=1,
+        replicas=loader_replicas,
         # Two loaders would only race on Iceberg commits; SQS redelivery makes a
         # short gap during a deploy harmless.
         strategy=k8s.apps.v1.DeploymentStrategyArgs(type="Recreate"),
@@ -133,7 +143,7 @@ ingestor = k8s.apps.v1.Deployment(
     "ingestor",
     metadata=k8s.meta.v1.ObjectMetaArgs(name="ingestor", namespace=ns, labels=ingestor_labels),
     spec=k8s.apps.v1.DeploymentSpecArgs(
-        replicas=1,
+        replicas=ingest_replicas,
         # Two ingestors would write every event twice.
         strategy=k8s.apps.v1.DeploymentStrategyArgs(type="Recreate"),
         selector=k8s.meta.v1.LabelSelectorArgs(match_labels=ingestor_labels),
@@ -203,6 +213,7 @@ silver = k8s.batch.v1.CronJob(
     "silver",
     metadata=k8s.meta.v1.ObjectMetaArgs(name="silver", namespace=ns, labels=silver_labels),
     spec=k8s.batch.v1.CronJobSpecArgs(
+        suspend=True if silver_suspend else None,  # unset rather than false: no diff on running stacks
         # :05, after the loader's commits for the previous hour have settled.
         schedule="5 * * * *",
         time_zone="Etc/UTC",
@@ -438,6 +449,91 @@ labels_job = k8s.batch.v1.CronJob(
     ),
     opts=opts,
 )
+
+# --- WP M5: the one-off lake copy into the member account (migrate/) ---
+# Only once the freeze's plan exists: it names the old tables' metadata files and
+# the old bucket, so it's a local file (migrationPlanFile / BSKY_MIGRATION_PLAN_FILE),
+# never stack config. Three suspended CronJobs, one per step, each started by hand:
+#   kubectl -n bsky create job --from=cronjob/migrate-tables migrate-tables-$(date +%s)
+# tables and objects resume where a previous run stopped.
+
+migration_plan_setting = config.get("migrationPlanFile") or os.environ.get("BSKY_MIGRATION_PLAN_FILE")
+migrate_jobs = {}
+if migration_plan_setting:
+    migration_plan_file = Path(migration_plan_setting).expanduser()
+    if not migration_plan_file.is_file():
+        raise ValueError(f"{migration_plan_file} not found: write it with `bsky-migrate plan` (migrate/CLAUDE.md)")
+    migrate_image_tag = config.require("migrationImageTag")
+    migrate_image = repository_urls.apply(lambda urls: f"{urls['migrate']}:{migrate_image_tag}")
+    migrate_memory_limit = config.get("migrationMemoryLimit") or "16Gi"
+    migrate_labels = {"app.kubernetes.io/name": "migrate", "app.kubernetes.io/part-of": "bsky-data-lake"}
+    migrate_sa = k8s.core.v1.ServiceAccount(
+        "migration",
+        # Must match the platform stack's Pod Identity association.
+        metadata=k8s.meta.v1.ObjectMetaArgs(name="migration", namespace=ns),
+        opts=opts,
+    )
+    migrate_plan = k8s.core.v1.ConfigMap(
+        "migration-plan",
+        metadata=k8s.meta.v1.ObjectMetaArgs(name="migration-plan", namespace=ns, labels=migrate_labels),
+        data={"plan.json": migration_plan_file.read_text()},
+        opts=opts,
+    )
+    for step in ("tables", "objects", "verify"):
+        migrate_jobs[step] = k8s.batch.v1.CronJob(
+            f"migrate-{step}",
+            metadata=k8s.meta.v1.ObjectMetaArgs(name=f"migrate-{step}", namespace=ns, labels=migrate_labels),
+            spec=k8s.batch.v1.CronJobSpecArgs(
+                schedule="0 0 1 1 *",  # never fires: suspended, run by hand
+                time_zone="Etc/UTC",
+                suspend=True,
+                concurrency_policy="Forbid",
+                job_template=k8s.batch.v1.JobTemplateSpecArgs(
+                    metadata=k8s.meta.v1.ObjectMetaArgs(labels=migrate_labels),
+                    spec=k8s.batch.v1.JobSpecArgs(
+                        # A retry resumes, so a couple are cheap.
+                        backoff_limit=2,
+                        active_deadline_seconds=24 * 3600,
+                        template=k8s.core.v1.PodTemplateSpecArgs(
+                            metadata=k8s.meta.v1.ObjectMetaArgs(
+                                labels=migrate_labels,
+                                annotations={
+                                    "karpenter.sh/do-not-disrupt": "true",
+                                    # A new plan restarts nothing running, but the next Job reads it.
+                                    "bsky/plan-hash": hashlib.sha256(migration_plan_file.read_bytes()).hexdigest()[:16],
+                                },
+                            ),
+                            spec=k8s.core.v1.PodSpecArgs(
+                                service_account_name=migrate_sa.metadata.name,
+                                restart_policy="Never",
+                                security_context=pod_security,
+                                volumes=[k8s.core.v1.VolumeArgs(
+                                    name="plan",
+                                    config_map=k8s.core.v1.ConfigMapVolumeSourceArgs(name=migrate_plan.metadata.name),
+                                )],
+                                containers=[
+                                    k8s.core.v1.ContainerArgs(
+                                        name="migrate",
+                                        image=migrate_image,
+                                        args=[step, "/plan/plan.json"],
+                                        env=[k8s.core.v1.EnvVarArgs(name="AWS_REGION", value=region)],
+                                        volume_mounts=[k8s.core.v1.VolumeMountArgs(
+                                            name="plan", mount_path="/plan", read_only=True,
+                                        )],
+                                        resources=k8s.core.v1.ResourceRequirementsArgs(
+                                            requests={"cpu": "2", "memory": migrate_memory_limit},
+                                            limits={"memory": migrate_memory_limit},
+                                        ),
+                                        security_context=container_security,
+                                    )
+                                ],
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            opts=opts,
+        )
 
 # --- Search: the index job and the query API (search/, WP E3) ---
 # One image, bsky/search. The index CronJob is the Lance dataset's only writer;
@@ -697,6 +793,7 @@ reports_build = k8s.batch.v1.CronJob(
     "reports",
     metadata=k8s.meta.v1.ObjectMetaArgs(name="reports", namespace=ns, labels=reports_labels),
     spec=k8s.batch.v1.CronJobSpecArgs(
+        suspend=True if reports_suspend else None,
         # :30, after silver's :05 run has caught up (about 5 minutes when it isn't behind).
         schedule="30 * * * *",
         time_zone="Etc/UTC",

@@ -1,10 +1,12 @@
 """AWS resources for the Bluesky data lake.
 
-The raw-file bucket and the warehouse bucket predate this stack. It adopts them
-(imported and protected, for their tags only) and never deletes them; it wires the raw bucket's ObjectCreated notifications to the
-queue the Iceberg loader consumes and creates the Glue database the raw
-Iceberg table lives in, located in the warehouse bucket. Athena's results
-bucket is the one bucket it creates.
+In the original account the raw-file bucket and the warehouse bucket predate
+this stack: it adopts them (imported and protected, for their tags only) and
+never deletes them. With `createBuckets` (a new account, WP M5) it creates them
+instead, named from the account ID like Athena's results bucket, and still never
+deletes them. It wires the raw bucket's ObjectCreated notifications to the queue
+the Iceberg loader consumes and creates the Glue database the raw Iceberg table
+lives in, located in the warehouse bucket.
 """
 
 import json
@@ -19,12 +21,22 @@ import bsky_iam
 load_dotenv(find_dotenv(usecwd=True))
 
 config = pulumi.Config()
-bucket = config.get("bucket") or os.environ.get("BSKY_BUCKET")
-if not bucket:
-    raise ValueError("set BSKY_BUCKET in .env or `pulumi config set bucket <name>`")
-warehouse_bucket = config.get("warehouseBucket") or os.environ.get("BSKY_WAREHOUSE_BUCKET")
-if not warehouse_bucket:
-    raise ValueError("set BSKY_WAREHOUSE_BUCKET in .env or `pulumi config set warehouseBucket <name>`")
+# Create the raw and warehouse buckets rather than import existing ones (a new account).
+# Their names then come from the account and region, in the account-regional namespace,
+# so .env's BSKY_BUCKET / BSKY_WAREHOUSE_BUCKET (which may name another account's) are ignored.
+create_buckets = config.get_bool("createBuckets", False)
+if create_buckets:
+    _account = aws.get_caller_identity().account_id
+    _region = aws.get_region().region
+    bucket = config.get("bucket") or f"bsky-data-drop-{_account}-{_region}-an"
+    warehouse_bucket = config.get("warehouseBucket") or f"bsky-processed-data-{_account}-{_region}-an"
+else:
+    bucket = config.get("bucket") or os.environ.get("BSKY_BUCKET")
+    if not bucket:
+        raise ValueError("set BSKY_BUCKET in .env or `pulumi config set bucket <name>`")
+    warehouse_bucket = config.get("warehouseBucket") or os.environ.get("BSKY_WAREHOUSE_BUCKET")
+    if not warehouse_bucket:
+        raise ValueError("set BSKY_WAREHOUSE_BUCKET in .env or `pulumi config set warehouseBucket <name>`")
 raw_prefix = (config.get("rawPrefix") or os.environ.get("BSKY_PREFIX") or "jetstream").strip("/") + "/"
 glue_database = config.get("glueDatabase") or "bsky_raw"
 silver_database_name = config.get("silverGlueDatabase") or "bsky_silver"
@@ -34,12 +46,17 @@ max_receive_count = config.get_int("maxReceiveCount") or 5
 manage_iam = config.get_bool("manageIam", True)
 # Iceberg tables in the raw database that Glue's table optimizers maintain.
 # The loader creates the tables, so add one here only once it exists.
-optimized_tables = config.get_object("optimizedTables") or ["jetstream"]
+# An empty list is honoured (a new account, before the tables exist), so check for None.
+optimized_tables = config.get_object("optimizedTables")
+if optimized_tables is None:
+    optimized_tables = ["jetstream"]
 # Likewise in the silver database: silver's TABLES plus its run log (silver/tables.py).
-optimized_silver_tables = config.get_object("optimizedSilverTables") or [
-    "posts", "likes", "reposts", "follows", "blocks", "profiles",
-    "identities", "accounts", "deletes", "rejects", "silver_runs",
-]
+optimized_silver_tables = config.get_object("optimizedSilverTables")
+if optimized_silver_tables is None:
+    optimized_silver_tables = [
+        "posts", "likes", "reposts", "follows", "blocks", "profiles",
+        "identities", "accounts", "deletes", "rejects", "silver_runs",
+    ]
 # Raw files are a replay source once loaded, so they expire.
 raw_retention_days = config.get_int("rawRetentionDays") or 7
 # Where alarms and budget alerts go. Kept out of committed config: it's personal.
@@ -57,6 +74,19 @@ embed_alarm_actions = config.get_bool("embedAlarmActions", False)
 index_alarm_actions = config.get_bool("indexAlarmActions", False)
 # And the moderation-labels job (labelsAlarmActions), suspended until its backfill is loaded.
 labels_alarm_actions = config.get_bool("labelsAlarmActions", False)
+# WP M5, the move to a member account. Both default off; the names and IDs they
+# need come from .env (shared by both accounts' stacks), so a flag per stack
+# decides which half each one creates.
+# In the new account: a pod role that reads the old warehouse and writes this one.
+migration_role = config.get_bool("migrationRole", False)
+migration_source_bucket = config.get("migrationSourceBucket") or os.environ.get("BSKY_MIGRATION_SOURCE_BUCKET")
+if migration_role and not migration_source_bucket:
+    raise ValueError("migrationRole needs BSKY_MIGRATION_SOURCE_BUCKET (the old warehouse bucket) in .env")
+# In the old account: let the new account's migration role and developer read the warehouse.
+migration_read_policy = config.get_bool("migrationReadPolicy", False)
+migration_reader_account = config.get("migrationReaderAccount") or os.environ.get("BSKY_MIGRATION_READER_ACCOUNT")
+if migration_read_policy and not migration_reader_account:
+    raise ValueError("migrationReadPolicy needs BSKY_MIGRATION_READER_ACCOUNT (the new account's ID) in .env")
 # The EKS cluster (platform stack), for Container Insights' log group and alarms.
 cluster_name = config.get("clusterName") or "bsky"
 container_insights_retention_days = config.get_int("containerInsightsRetentionDays") or 14
@@ -67,11 +97,13 @@ bucket_arn = f"arn:aws:s3:::{bucket}"
 warehouse_bucket_arn = f"arn:aws:s3:::{warehouse_bucket}"
 warehouse = f"s3://{warehouse_bucket}/iceberg"
 
-# --- The pre-existing buckets: adopted for cost-allocation tags only ---
+# --- The raw and warehouse buckets ---
 
-# Imported rather than created, protected, and kept if they ever leave the code.
+# Imported (the original account) or created (createBuckets), protected either way, and
+# kept if they ever leave the code: deleting one is a deliberate, manual step.
 # In provider v7 a Bucket is only the bucket and its tags; its notification and
-# lifecycle stay with their own resources below.
+# lifecycle stay with their own resources below. A new bucket gets S3's defaults,
+# which match the originals: unversioned, SSE-S3, ACLs disabled, public access blocked.
 existing_buckets = {
     component: aws.s3.Bucket(
         f"{component}-bucket",
@@ -79,10 +111,20 @@ existing_buckets = {
         # Like Athena's results bucket, they're in the account-regional namespace (-an).
         bucket_namespace="account-regional",
         tags={"component": component},
-        opts=pulumi.ResourceOptions(import_=name, protect=True, retain_on_delete=True),
+        opts=pulumi.ResourceOptions(import_=None if create_buckets else name, protect=True, retain_on_delete=True),
     )
     for component, name in {"raw": bucket, "warehouse": warehouse_bucket}.items()
 }
+if create_buckets:
+    for component, b in existing_buckets.items():
+        aws.s3.BucketPublicAccessBlock(
+            f"{component}-bucket",
+            bucket=b.bucket,
+            block_public_acls=True,
+            block_public_policy=True,
+            ignore_public_acls=True,
+            restrict_public_buckets=True,
+        )
 
 # --- SQS: S3 notifications for raw files, with a dead-letter queue ---
 
@@ -130,7 +172,7 @@ queue_policy = aws.sqs.QueuePolicy(
 # notification targets on the bucket must be added here too.
 notification = aws.s3.BucketNotification(
     "raw-files",
-    bucket=bucket,
+    bucket=existing_buckets["raw"].bucket,  # the resource, so a created bucket exists first
     queues=[
         aws.s3.BucketNotificationQueueArgs(
             queue_arn=queue.arn,
@@ -146,7 +188,7 @@ notification = aws.s3.BucketNotification(
 # Like the notification, this owns the bucket's entire lifecycle configuration.
 raw_lifecycle = aws.s3.BucketLifecycleConfiguration(
     "raw-files",
-    bucket=bucket,
+    bucket=existing_buckets["raw"].bucket,  # the resource, so a created bucket exists first
     rules=[
         aws.s3.BucketLifecycleConfigurationRuleArgs(
             id=f"expire-{prefix.strip('/')}",
@@ -176,7 +218,7 @@ raw_lifecycle = aws.s3.BucketLifecycleConfiguration(
 # S3 doesn't transition objects under 128 KB, so small metadata files stay in Standard.
 warehouse_lifecycle = aws.s3.BucketLifecycleConfiguration(
     "warehouse",
-    bucket=warehouse_bucket,
+    bucket=existing_buckets["warehouse"].bucket,  # the resource, so a created bucket exists first
     rules=[
         aws.s3.BucketLifecycleConfigurationRuleArgs(
             id="iceberg-intelligent-tiering",
@@ -931,6 +973,111 @@ if manage_iam:
         for table in tables
         for kind, configuration in _optimizer_configs(optimizer_role.arn, min_input_files).items()
     }
+
+# --- WP M5: copying the lake into the member account (migrate/) ---
+# Prefixes the copy reads from the old warehouse and writes here. lance-test/ is
+# the small scratch index, copied first to check Lance datasets survive the move.
+MIGRATION_PREFIXES = ["iceberg", "lance", "lance-test", "reports"]
+MIGRATION_ROLE_NAME = "bsky-migration"
+# The new account's developer permission set, for the lance-test check from a laptop.
+MIGRATION_DEVELOPER_ROLE = "AWSReservedSSO_BskyDataLakeDeveloper-Workloads_*"
+
+if manage_iam and migration_role:
+    source_arn = f"arn:aws:s3:::{migration_source_bucket}"
+    migration_policy_document = pulumi.Output.all(account_id, region).apply(
+        lambda args: json.dumps(
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Sid": "ListOldWarehouse",
+                        "Effect": "Allow",
+                        "Action": "s3:ListBucket",
+                        "Resource": source_arn,
+                        "Condition": {"StringLike": {"s3:prefix": [f"{p}/*" for p in MIGRATION_PREFIXES]}},
+                    },
+                    {
+                        "Sid": "ReadOldWarehouse",
+                        "Effect": "Allow",
+                        "Action": ["s3:GetObject", "s3:GetObjectTagging"],
+                        "Resource": [f"{source_arn}/{p}/*" for p in MIGRATION_PREFIXES],
+                    },
+                    {
+                        "Sid": "ListWarehouse",
+                        "Effect": "Allow",
+                        "Action": "s3:ListBucket",
+                        "Resource": warehouse_bucket_arn,
+                        "Condition": {"StringLike": {"s3:prefix": [f"{p}/*" for p in MIGRATION_PREFIXES]}},
+                    },
+                    {
+                        "Sid": "WriteWarehouse",
+                        "Effect": "Allow",
+                        "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"],
+                        "Resource": [f"{warehouse_bucket_arn}/{p}/*" for p in MIGRATION_PREFIXES],
+                    },
+                    {
+                        "Sid": "WriteCatalog",
+                        "Effect": "Allow",
+                        "Action": ["glue:GetDatabase", "glue:GetDatabases", "glue:GetTable", "glue:GetTables",
+                                   "glue:CreateTable", "glue:UpdateTable"],
+                        "Resource": [
+                            f"arn:aws:glue:{args[1]}:{args[0]}:catalog",
+                            *[f"arn:aws:glue:{args[1]}:{args[0]}:database/{d}" for d in (glue_database, silver_database_name)],
+                            *[f"arn:aws:glue:{args[1]}:{args[0]}:table/{d}/*" for d in (glue_database, silver_database_name)],
+                        ],
+                    },
+                ],
+            }
+        )
+    )
+    migration_policy = bsky_iam.policy(
+        "migration",
+        name=MIGRATION_ROLE_NAME,
+        description="WP M5: read the old warehouse, write this account's tables and objects",
+        policy=migration_policy_document,
+    )
+    migration = _pod_role("migration", MIGRATION_ROLE_NAME, "EKS pod role for the one-off lake copy (WP M5)")
+    aws.iam.RolePolicyAttachment("migration", role=migration.name, policy_arn=migration_policy.arn)
+    pulumi.export("migration_role_arn", migration.arn)
+
+if migration_read_policy:
+    # Read-only, and only for the new account's migration role and developer. The bucket
+    # had no policy before, so this owns the whole document; remove it after the move.
+    reader_root = f"arn:aws:iam::{migration_reader_account}:root"
+    readers = [
+        f"arn:aws:iam::{migration_reader_account}:role/bsky/{MIGRATION_ROLE_NAME}",
+        f"arn:aws:iam::{migration_reader_account}:role/aws-reserved/sso.amazonaws.com/*{MIGRATION_DEVELOPER_ROLE}",
+    ]
+    migration_bucket_policy = aws.s3.BucketPolicy(
+        "warehouse-migration-read",
+        bucket=existing_buckets["warehouse"].bucket,
+        policy=json.dumps(
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Sid": "MigrationList",
+                        "Effect": "Allow",
+                        "Principal": {"AWS": reader_root},
+                        "Action": "s3:ListBucket",
+                        "Resource": warehouse_bucket_arn,
+                        "Condition": {
+                            "ArnLike": {"aws:PrincipalArn": readers},
+                            "StringLike": {"s3:prefix": [f"{p}/*" for p in MIGRATION_PREFIXES]},
+                        },
+                    },
+                    {
+                        "Sid": "MigrationRead",
+                        "Effect": "Allow",
+                        "Principal": {"AWS": reader_root},
+                        "Action": ["s3:GetObject", "s3:GetObjectTagging"],
+                        "Resource": [f"{warehouse_bucket_arn}/{p}/*" for p in MIGRATION_PREFIXES],
+                        "Condition": {"ArnLike": {"aws:PrincipalArn": readers}},
+                    },
+                ],
+            }
+        ),
+    )
 
 # --- Alerts: pipeline alarms and a cost budget, by email ---
 

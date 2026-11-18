@@ -203,6 +203,7 @@ def test_embed_key_comes_from_the_key_file_as_a_secret():
 def test_silver_cronjob():
     def check(spec):
         assert spec["schedule"] == "5 * * * *"
+        assert not spec.get("suspend")  # runs unless silverSuspend (a new account's stand-up)
         assert spec["concurrency_policy"] == "Forbid"
         job = spec["job_template"]["spec"]
         assert job["backoff_limit"] == 2
@@ -237,6 +238,7 @@ def test_reports_service_account():
 def test_reports_cronjob():
     def check(spec):
         assert spec["schedule"] == "30 * * * *"
+        assert not spec.get("suspend")  # runs unless reportsSuspend
         assert spec["concurrency_policy"] == "Forbid"
         job = spec["job_template"]["spec"]
         assert job["active_deadline_seconds"] < 3600

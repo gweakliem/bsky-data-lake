@@ -79,18 +79,172 @@ The account budget `bsky-monthly` is $250 (deployment plan, D6).
 
 ## WP M5: move the workloads out of the management account
 
-- **Status: proposed; decision needed.**
+- **Status: in progress (2026-11-16). Option 2 chosen:** a member account for the data lake. Phases A–C are done. Phase D (the new account ingesting alongside the old) ran from T0, 2026-11-16 17:34Z. **Phase E is done (2026-11-18 15:20Z):** the lake was copied and verified, every job runs in the new account, and the old ingest is stopped. Phase F (decommissioning the old account's workloads) is due about 2026-12-02.
 - **Why:** the data lake runs in the AWS Organization's management account, the account that owns the organization and pays the bill. AWS recommends keeping the management account free of workloads:
   - Service control policies (SCPs, the organization-wide guardrails) don't apply to the management account, so they can't limit what its roles do.
   - A credential leaked from a workload in the management account sits next to control of the whole organization: accounts, billing and IAM Identity Center.
   - Costs and permissions are cleaner when each account holds one thing.
-- **Options:**
-  1. **Leave it, with compensating controls.** Keep the developer role's permissions boundary (`infra/iam-bootstrap`), finish M4, and keep workload roles least-privilege. This costs nothing, and is reasonable while one person runs the project.
-  2. **New member account for the data lake.** Create an account in the organization, bootstrap IAM there (`infra/iam-bootstrap`), and point the Pulumi stacks at it. Then move the data:
-     - S3: copy the raw and warehouse buckets. Copies within a region pay request charges, not transfer.
-     - Glue: re-register the Iceberg tables in the new account's catalog, pointing at the copied locations.
-     - EKS, VPC and IAM: create fresh from the stacks rather than move.
-     - Cut over the ingestor last, so the gap is covered by cursor resume.
-  3. **Cross-account data in place.** Leave the buckets where they are and run compute in a member account with cross-account bucket and Glue access. This moves less data, but the workloads still depend on the management account, which defeats most of the purpose.
-- **Decide:** option 1 or 2, and when. Option 2 is easiest before the lake grows further. The warehouse was 136 GB of silver on 2026-11-10, plus bronze.
-- **Acceptance for option 2:** every stack deployed in the member account, the jobs running there, the old resources deleted from the management account, and the management account left with only Organizations, IAM Identity Center, billing and CloudTrail.
+  - It gets harder to move as the lake grows, which is why it goes ahead of other work.
+- **Options considered:**
+  1. Leave it, with compensating controls (permissions boundary, M4, least-privilege roles).
+  2. **New member account for the data lake (chosen).**
+  3. Cross-account data in place: compute in a member account, buckets left in the management account. Rejected because the workloads would still depend on the management account.
+
+### Target layout
+
+- **Management account:** Organizations, IAM Identity Center, consolidated billing, the organization-wide budget, cost allocation tags and (M4) CloudTrail. No workloads.
+- **OU `Workloads`:** one account per project, so the bill splits by linked account without tags. `bsky-data-lake` is the first. A later production environment gets its own account (`Workloads/Prod`).
+- **SCP on `Workloads`:** deny `organizations:LeaveOrganization`, and deny every action by the root user (`aws:PrincipalArn` like `arn:aws:iam::*:root`). `FullAWSAccess` stays attached. A region restriction is deferred, because it needs exceptions for global services.
+- **Root access management** is centralized in the management account, so member accounts have no root credentials. Root access is not delegated to a member account: there is no security account to delegate to.
+- **Account IDs stay out of the repo,** as before. They live in `~/.aws/config` and `.env`.
+
+### Phase A: account and access (done 2026-11-16)
+
+- Member account `bsky-data-lake` created in OU `Workloads`, tagged `project=bsky-data-lake`.
+- `infra/iam-bootstrap/` applied in the new account:
+  - the boundary `bsky-workload-boundary`;
+  - a separate permission set `BskyDataLakeDeveloper-Workloads` (`PowerUserAccess` plus the inline policy rendered for the new account), since the existing permission set's inline policy names the management account's ID.
+- Verified with the new developer profile: creating a role under `/bsky/` with the boundary succeeds. Creating one without the boundary, creating one outside `/bsky/`, removing a role's boundary and editing the boundary are all denied.
+- A temporary `AdministratorAccess` assignment on the new account was used for the bootstrap. **Removed 2026-11-16 (verified).** A local SSO profile that asks for `AdministratorAccess` now signs in but gets `ForbiddenException: No access`. Re-assign the permission set in Identity Center for a one-off admin task, then remove it again. Day-to-day work uses `BskyDataLakeDeveloper-Workloads`.
+- **Still to confirm in the console:** SCP attached; root access management on; billing access for IAM activated (M3 step 1); cost allocation tags `project`, `stack` and `component` active.
+
+### What can't simply be copied
+
+- **Bucket names change.** The buckets are in S3's account-regional namespace (`<prefix>-<account>-<region>-an`), so the new account's names follow from its ID. The data stack derives them (`createBuckets`), and nothing secret goes in config. They still differ from the old names, which is what matters below. The Pulumi state bucket follows the same pattern.
+- **Iceberg metadata holds absolute paths.** Every metadata file, manifest list and manifest names its files as `s3://<warehouse>/iceberg/...`. Copying the objects into a bucket with a new name leaves tables pointing at the old bucket.
+  - Iceberg's `rewrite_table_path` procedure fixes this, but it needs Spark with Iceberg 1.8 or later, and Sail can't run `CALL`.
+  - **So tables are re-written, not copied.** A copy job reads each old table and appends its rows to a new table of the same schema and partitioning in the new account, day by day. Snapshot history isn't carried over, which nothing here needs. Every row keeps its values, including `event_id`, `bronze_ingested_at` and the run-state tables' watermarks.
+- **Lance stores relative paths** inside a dataset (verified in phase C), so the search index can be copied as plain objects.
+- **EKS, VPC, NAT, IAM roles, queues, alarms and log groups** are created fresh from the stacks. Nothing is moved.
+
+### Sizes (2026-11-16)
+
+| What | Size | Plan |
+|---|---|---|
+| Raw bucket (`jetstream/`, 7-day expiry) | 41 GB | not copied: the new ingestor fills its own |
+| Warehouse `iceberg/` (bronze `jetstream` and 15 silver tables) | ~250 GB | re-written table by table |
+| Warehouse `lance/` (search index) | 415 GB, 154 GB after the version cleanup | copied |
+| Warehouse `reports/` | small | copied |
+| Warehouse `lance-test/` (scratch) | — | not copied |
+
+Copies within one region have no transfer charge, only request charges. Both accounts store the data during the overlap, about $15 a month for the duplicate 665 GB, prorated. The two clusters overlap too, at about $5 a day.
+
+With `lance/` at 154 GB, the duplicate is about 400 GB, roughly $9 a month while both accounts hold it.
+
+~~**415 GB for 37M rows looks large.**~~ Resolved: most of it was unreferenced index files from old versions (264 of 274 GB of index files). With 2 hours' version retention (`1e818aa`), `lance/` went to 154 GB.
+
+### Phase B: make the stacks account-neutral (code, no applies; done 2026-11-16)
+
+- **New stack name `main`** in all three projects (`Pulumi.main.yaml`). A second `dev` in the new backend would share `Pulumi.dev.yaml` with the old stacks, including image tags and the encryption salt. `StackReference`s default to the current stack's name, so they follow. The old `dev` stacks stay in the old backend until phase F destroys them.
+- **Data stack, `createBuckets`:**
+  - creates the raw and warehouse buckets instead of importing them, named from the account ID, with `protect` and `retain_on_delete` either way;
+  - adds a public access block on each new bucket;
+  - makes the notification and lifecycle resources refer to the bucket resources, so they wait for a created bucket;
+  - S3's defaults for a new bucket match the old buckets (unversioned, SSE-S3, ACLs disabled).
+  - Checked with mocks in a separate process, since the existing tests load the stack once with the old account's settings: the names come from the account ID, `.env`'s old names are ignored, and the notification targets the new raw bucket.
+- **Apps stack, stand-up switches:** `ingestReplicas`, `loaderReplicas` (0 or 1), `silverSuspend` and `reportsSuspend`, next to the existing `embedSuspend`, `labelsSuspend`, `indexSuspend` and `searchReplicas`. `Pulumi.main.yaml` starts everything stopped, with the `dev` stack's image tags.
+- **Alarms in the new account:** the embed and labels alarm actions start off. The ingest, loader and silver alarms will be in alarm while everything is stopped. The new SNS email subscription stays unconfirmed until phase D, so nothing is delivered before then.
+- **Budget:** stays in the data stack. In the new account it watches that account's spend. The old account's `bsky-monthly` covers the whole organization, since a management account's budget includes linked accounts. When phase F destroys the old data stack, recreate an organization-wide budget in the management account by hand.
+- **Nothing else is tied to the account.** In the cluster, the queue URL, account ID and locations come from stack outputs. On the laptop they come from `.env` (`BSKY_LOADER_QUEUE_URL`, `BSKY_AWS_ACCOUNT_ID`, bucket names), which switches to the new values at phase E.
+- **Not done in phase B, waiting on decisions:**
+  - ~~the NAT instance (M1) in the new platform stack;~~ added in phase C;
+  - the GitHub OIDC provider and CI role (D2). The developer inline policy already allows the provider by its exact ARN, so either can be added before or after phase C.
+### Phase C: stand up the new account, empty
+
+- **State backend first:** create `pulumi-state-<new account>-us-west-2-an` in the new account (by hand, like the original, since Pulumi can't create its own backend). Then `pulumi stack init main` in each project, with `PULUMI_BACKEND_URL` pointing at it and the same passphrase file.
+- Apply data → platform → apps in the new account with the `bsky-data-lake` profile, each after a preview and a yes.
+- **Apps stack:**
+  - **Nothing scheduled runs yet:** ingestor at 0 replicas, every CronJob suspended.
+  - **Images:** copy the current tags from the old ECR to the new one (for example `crane copy`), rather than rebuilding, so the same code runs.
+- **Cross-account read:** a bucket policy on the old warehouse bucket (old data stack, a Pulumi change in the management account) lets the new account's copy role read `iceberg/`, `lance/` and `reports/`. It is read-only, and removed in phase F.
+- **New EKS endpoint and kube context:** `BSKY_EKS_PUBLIC_CIDRS` and a new kubeconfig entry. The reports NLB gets a new URL, so tell the demo users.
+- **SNS:** confirm the new alert email subscription.
+- **Lance check:** copy `lance-test/` to the new warehouse and open it there with the search CLI. If it opens and answers queries, the relative-path assumption holds.
+
+- **Progress (2026-11-16):**
+  - **State bucket:** created, with versioning (old versions expire after 30 days), unlike the original. The `main` stacks are initialised in it.
+  - **Data stack applied:** 73 resources.
+  - **Platform stack applied:** 59 resources, with the fck-nat NAT instance (M1) instead of the managed gateway. Both EKS add-ons are active and `kubectl top` works. The kube context is `bsky-main`.
+  - **Images:** the 7 current tags are copied to the new ECR with `docker buildx imagetools create`.
+  - **Apps stack applied:** 37 resources, with nothing writing. Fluent Bit, event-exporter and reports-web (a new NLB URL) run; the ingestor, loader and search are at 0, and every CronJob is suspended.
+  - **Copy job (`migrate/`, see its CLAUDE.md):** re-writes each table from its metadata file one partition at a time, resumably, and copies `lance/` and `reports/inputs/` server side. It reads the old warehouse through a read-only bucket policy (old data stack, `migrationReadPolicy`), so the old Glue catalog isn't needed. The role `bsky-migration` (new data stack, `migrationRole`) writes the new warehouse and catalog.
+  - **Lance check passed:** `lance-test/` (89 objects, 552 MB) copied in 4 s and opened in the new bucket with the same rows (105,221), version, 6 indexes and query results. So `lance/` is copied, not rebuilt.
+  - **Old tables (2026-11-16):** no delete files; one partition spec and one schema each. Bronze is partitioned by `day` and `hour`, silver by `day`; `silver_runs` and `post_edges_backfill` are unpartitioned.
+  - **Copy job deployed:** the platform's `bsky/migrate` repository and Pod Identity association are applied, and the image is pushed (`a706bb7`, amd64 and arm64).
+- **What the stand-up turned up:**
+  - **New-account EC2 validation:** a new account can't launch instances until AWS validates it (minutes, up to 4 hours, with an email). The first platform apply failed on the NAT instance and EKS add-ons until it cleared.
+  - **fck-nat's interfaces:** traffic comes in on the fixed interface (`eni_id`) and leaves masqueraded through the instance's own interface. fck-nat moves the Elastic IP there (`eip_id`) and turns off that interface's source/destination check, so its role needs `ec2:ModifyNetworkInterfaceAttribute` on network interfaces and `ec2:AssociateAddress` on the Elastic IP. With the Elastic IP on the fixed interface instead, return traffic was dropped and nothing in the private subnets reached the internet.
+  - **Instance profiles:** the developer policy needed `instance-profile/bsky/*` rights (`iam-bootstrap/developer-inline-policy.json`) before the NAT instance could have one.
+  - **Glue table optimizers** fail on tables that don't exist yet, so `main` starts with none (`optimizedTables: []`).
+  - **Changing a role's description** needs `iam:UpdateRoleDescription`, which the developer policy doesn't grant. Set descriptions right the first time.
+  - **EC2 interface descriptions** reject apostrophes.
+
+### Phase D: start ingest in the new account (T0)
+
+- Scale the new ingestor to 1 and start the loader. The new bronze fills from T0.
+- **The old pipeline keeps running unchanged.** Both ingestors read Jetstream independently, so there is no gap and no shared state.
+- Watch the new account's `bsky-ingest-stalled` and loader alarms for a day.
+
+- **Progress:**
+  - **Started 2026-11-16: T0 = 17:34:44 UTC,** when the new ingestor connected (live, no file to resume from). The first raw file and bronze commit arrived by 17:38Z. The loader created `bsky_raw.jetstream` in the new catalog.
+  - **SNS confirmed 2026-11-16.** CloudWatch notifies only on a state change. Alarms that were already in ALARM before the subscription (silver stalled; embed, index and labels with actions off) send nothing until they recover and fire again.
+  - **Check at 2026-11-17 01:18Z (T0 + 7¾ h):** in `bsky-main`, the ingestor and loader had run 7h43m with no restarts. The loader was appending one 16–17 MB file to `bsky_raw.jetstream` about every 4 minutes, with none already loaded.
+
+### Phase E: freeze, copy overnight, switch (after about a day of phase D)
+
+Run across a night, Mountain time: steps 1–3 in the evening, the copy while nobody's watching, steps 4–7 the next morning. The copy runs as Jobs in the new cluster; the laptop is only needed to start them.
+
+1. **Freeze the old downstream jobs** (`--context bsky-dev`): suspend the old silver, embed, index, labels and reports CronJobs once each has finished its current run. The old ingestor and loader keep running. Note the old silver's last `bronze_through` (W).
+2. **Write the plan** with the old account's credentials, right after the freeze: `bsky-migrate plan --dest-warehouse <new warehouse> --exclude bsky_silver.post_edges_backfill` (a temporary table, dropped). It pins each table's current metadata file. Then apply the new apps stack with `BSKY_MIGRATION_PLAN_FILE` set, which adds the migrate CronJobs.
+3. **Copy** (`migrate/CLAUDE.md`): start `migrate-tables` and `migrate-objects`. They write different prefixes, so they can run at the same time.
+   - **Tables:** every silver table, including `silver_runs` and the other jobs' state, and **all of bronze**, as of the plan (decided 2026-11-16).
+     - **Why no cut-off at T0:** silver's position is a bronze `ingested_at`. The two loaders stamp the same event minutes apart, so cutting bronze at T0 would lose the events stamped after W by the old loader and before W by the new one.
+     - **With all of bronze:** the new silver resumes at W and reads both copies of every later event, and its anti-join on `event_id` keeps one, as after any ingestor restart. Embed and index follow, since the new silver rows all come after W.
+     - **The cost:** bronze holds the T0-to-freeze day twice. Accepted while in development.
+   - **Objects:** `lance/` (smaller after the 2-hour version retention, `1e818aa`) and `reports/inputs/`.
+4. **Verify:** `migrate-verify` compares row counts per partition, and each job's state table shows the same position as the old one.
+5. **Switch the new data stack to running:**
+   - restore the optimizer lists (drop `optimizedTables: []` and `optimizedSilverTables: []` from `Pulumi.main.yaml`);
+   - turn on `embedAlarmActions`, `labelsAlarmActions` and `indexAlarmActions`.
+6. **Unsuspend the new CronJobs** in pipeline order: silver, embed, index, labels, reports; then search to 1 replica. Each continues from its copied position, with no adjustment.
+7. **Stop the old ingestor and loader.**
+
+**Rollback until step 7:** unsuspend the old CronJobs. The old account has missed nothing, because its ingest never stopped.
+
+- **Progress (2026-11-17/18, all times UTC):**
+  1. **Freeze, 11-17 23:59:53:** the five old CronJobs were suspended with `kubectl patch` while none was running. **W = 2026-11-17 23:04:10.122046Z,** the old silver's last `bronze_through`. The old `dev` apps stack now differs from its cluster, so don't `pulumi up` it before phase F: that would unsuspend the old jobs.
+  2. **Plan:** 15 tables (bronze and 14 silver) and two object prefixes, written right after the freeze. Apps `main` applied with the three suspended migrate CronJobs.
+  3. **Copy, 11-18 00:03 to 06:07:**
+     - **Objects:** `lance/` (2,010 objects, 157 GB) and `reports/inputs/` copied in under 3 minutes.
+     - **Tables:** three problems, each fixed before data was lost:
+       - **The resume logic cleared the new loader's bronze.** The copy writes into the table the new loader has filled since T0, and treated every unmarked hour as a crashed copy. It replaced the new loader's rows from 11-16 17:00 to 11-17 11:00 with the old loader's copies of the same events before it was stopped at 00:58. All of those rows are from before W, so silver wasn't affected. Fix: bronze is a live destination, and the copy never deletes there (image `m5-20261118`).
+       - **pyiceberg's batch reader ran out of memory** on likes' 2026-11-04, 44M rows, twice a normal day. It submits every file of a scan to its thread pool at once, and finished files pile up ahead of the writer. Fix: read one file at a time (image `m5-20261118b`, about 4–5 GB on that day). A Job retrying with Karpenter launching and removing a node for each pod used about 1½ hours before this was found.
+       - **Commits of 2M rows ran out of memory on `post_embeddings`,** with a vector per row. The rest ran with `--rows-per-commit 250000`, at 2.3–2.7 GB.
+  4. **Verify, 06:10:** `ok` on all 15 tables. Silver matches row for row (likes 422.5M, post_edges 551.5M, post_embeddings 51.5M, silver_runs 1,477). Bronze holds 663.7M rows against 630.2M in the source, with no hour short; the extra rows are the new loader's.
+  5. **Data stack, about 15:10:** 36 Glue optimizers, and alarm actions on for embed, labels and index. The old stack never turned index's on.
+  6. **Jobs, 15:13–15:18:** unsuspended, and search at 1 replica.
+     - Silver resumed exactly at W and caught up from there; its first windows over the doubled day appended about half the usual rows per window, as the anti-join drops the second copy. Embed, index (the copied 50.5M-row dataset) and labels (after seq 46,146,033) continued from their copied state.
+     - **Unsuspending a CronJob runs its last missed schedule at once,** so don't also start one by hand. A second silver run was started and deleted before its pod began.
+  7. **Old ingest stopped, 15:19:40 and 15:20:34:** the ingestor, then the loader after its last commit (15:20:10), both scaled to 0 with `kubectl`. The old account's stalled alarms fire from here until phase F. Its reports-web, search and event-exporter still run.
+
+### Phase F: decommission the old account's workloads (about two weeks after E)
+
+- `pulumi destroy` the old apps and platform stacks, from the old backend.
+- Keep the old buckets read-only for the two weeks, then remove the cross-account policy and delete them. The data stack's `protect`/`retain_on_delete` means the old buckets are deleted by hand, on purpose.
+- Remove the old Glue databases, queues, alarms, log groups, ECR repository and the old state bucket.
+- Remove the old `BskyDataLakeDeveloper` assignment on the management account. The developer then has no workload access there.
+- The management account is left with only Organizations, IAM Identity Center, billing, the budget and CloudTrail (M4).
+
+### Decide
+
+- ~~**`lance/`:** copy it or rebuild it.~~ Copy: phase C's check passed. Its 415 GB was mostly a day of old versions' index files; with 2 hours' retention (`1e818aa`) the first run took it to 154 GB in 1,903 objects (from 9,517), 2026-11-16 18:40Z.
+- ~~**NAT.**~~ The new platform stack runs the fck-nat instance (M1).
+- ~~**`post_edges_backfill`:** copy it or drop it.~~ Dropped: a temporary table.
+- ~~**Overlap length.**~~ About a day, then phase E across a night, Mountain time.
+
+### Acceptance
+
+- Every stack is deployed in the member account, and every job runs there on schedule, with its alarms.
+- Per-table row counts match across the freeze, and no day has a gap in silver.
+- Search, reports and the clustering inputs work from the new account.
+- The old workloads and buckets are deleted, and the management account holds only Organizations, IAM Identity Center, billing and CloudTrail.

@@ -251,7 +251,7 @@ D4 is split so the loader, which recovers easily, is the first workload deployed
     - `bsky-pod-memory-high`: a pod's `pod_memory_utilization_over_pod_limit` peaked at 90% or more.
     - `bsky-pod-oom-killed`: `pod_container_status_terminated_reason_oom_killed`.
     - `bsky-pod-crash-looping`: `pod_container_status_waiting_reason_crash_loop_back_off`.
-    - `bsky-job-failed`: a log metric filter on the exporter's `Job` events with reason `BackoffLimitExceeded` or `DeadlineExceeded`.
+    - `bsky-job-failed-<job>`: log metric filters on the exporter's `Job` events with reason `BackoffLimitExceeded` or `DeadlineExceeded`, one per CronJob by Job-name prefix plus `other` (split per job 2026-11-18, so the alarm names the job).
   - **What the tests showed (2026-11-13):**
     - **Container Insights reports running pods only.** A Job's failed pod (`restartPolicy: Never`) vanishes from its metrics, so it can't alarm on Job failures (`pod_status_failed` stayed 0). The exporter does.
     - **The reason metrics come from a container's last state,** so they appear only once a container has restarted. They cover Deployments, not Jobs.
@@ -279,7 +279,7 @@ D4 is split so the loader, which recovers easily, is the first workload deployed
   | Ingest stalled | raw queue `NumberOfMessagesSent` < 1 over 15 min | ingestor stopped writing (needs no ingestor metrics) |
   | Loader behind | raw queue `ApproximateAgeOfOldestMessage` > 15 min | loader stuck or down |
   | Poison messages | DLQ `ApproximateNumberOfMessagesVisible` > 0 | a file or notification failing repeatedly |
-  | Job failures | `bsky-job-failed`: the event exporter's `BackoffLimitExceeded`/`DeadlineExceeded` Job events | any Job failed, CronJob runs and one-offs |
+  | Job failures | `bsky-job-failed-<job>` (per CronJob, plus `other`): the event exporter's `BackoffLimitExceeded`/`DeadlineExceeded` Job events | any Job failed, CronJob runs and one-offs |
   | Pod memory, OOM, crash loops | `bsky-pod-memory-high`, `bsky-pod-oom-killed`, `bsky-pod-crash-looping` (Container Insights) | a pod near its limit, or a Deployment's container killed or looping |
 
 - **Pipeline latency (backlog, raised 2026-11-11):** how long each layer takes, from Jetstream to bronze, silver, and the classify and embed tables, and each job's run time. Kept as metrics (for example a CloudWatch metric per job from its run log line), not as ingestion-time columns in every table. Silver already logs per-window timing.

@@ -320,8 +320,9 @@ def test_pipeline_alarms_notify_the_alert_topic():
     def check(topic_arn):
         alarms = {a["name"]: a for a in mocks.by_type["aws:cloudwatch/metricAlarm:MetricAlarm"]}
         assert sorted(alarms) == [
-            "bsky-dead-letters", "bsky-embed-stalled", "bsky-index-stalled", "bsky-ingest-stalled", "bsky-job-failed",
-            "bsky-labels-stalled",
+            "bsky-dead-letters", "bsky-embed-stalled", "bsky-index-stalled", "bsky-ingest-stalled",
+            "bsky-job-failed-embed", "bsky-job-failed-index", "bsky-job-failed-labels", "bsky-job-failed-other",
+            "bsky-job-failed-reports", "bsky-job-failed-silver", "bsky-labels-stalled",
             "bsky-loader-behind", "bsky-pod-crash-looping", "bsky-pod-memory-high", "bsky-pod-oom-killed", "bsky-silver-stalled",
         ]
         for a in alarms.values():
@@ -519,14 +520,20 @@ def test_cloudwatch_agent_role_uses_the_managed_agent_policy():
     return infra.cloudwatch_agent_role.arn.apply(check)
 
 
-def test_job_failed_alarm_counts_failed_job_events():
+def test_job_failed_alarms_name_the_job():
     alarms = {a["name"]: a for a in mocks.by_type["aws:cloudwatch/metricAlarm:MetricAlarm"]}
     filters = {f["name"]: f for f in mocks.by_type["aws:cloudwatch/logMetricFilter:LogMetricFilter"]}
-    a, f = alarms["bsky-job-failed"], filters["bsky-job-failures"]
-    assert (a["metricName"], a["namespace"]) == (f["metricTransformation"]["name"], f["metricTransformation"]["namespace"])
-    assert '$.involvedObject.kind = "Job"' in f["pattern"]
-    assert "BackoffLimitExceeded" in f["pattern"] and "DeadlineExceeded" in f["pattern"]
-    assert a["treatMissingData"] == "notBreaching" and a["threshold"] == 1
+    for job in (*infra.JOB_NAMES, "other"):
+        a, f = alarms[f"bsky-job-failed-{job}"], filters[f"bsky-job-failures-{job}"]
+        assert (a["metricName"], a["namespace"]) == (f["metricTransformation"]["name"], f["metricTransformation"]["namespace"])
+        assert '$.involvedObject.kind = "Job"' in f["pattern"]
+        assert "BackoffLimitExceeded" in f["pattern"] and "DeadlineExceeded" in f["pattern"]
+        assert a["treatMissingData"] == "notBreaching" and a["threshold"] == 1
+    assert '$.involvedObject.name = "silver-*"' in filters["bsky-job-failures-silver"]["pattern"]
+    # Every Job is counted once: `other` excludes exactly the named CronJobs.
+    other = filters["bsky-job-failures-other"]["pattern"]
+    assert all(f'$.involvedObject.name != "{job}-*"' in other for job in infra.JOB_NAMES)
+    assert " = \"" not in other.split("DeadlineExceeded")[1]
 
 
 @pulumi.runtime.test

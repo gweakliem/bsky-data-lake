@@ -1348,35 +1348,62 @@ pod_crash_looping = _insights_alarm(
 # A Job that failed: its pods exited non-zero (an OOM kill included) past its
 # backoff limit, or it ran past its deadline. Container Insights can't see
 # these (it reports running pods only); the apps stack's event exporter logs
-# the Job's event as a JSON line. Any Job, CronJob runs and one-offs alike.
-job_failures = aws.cloudwatch.LogMetricFilter(
-    "job-failures",
-    name="bsky-job-failures",
-    log_group_name=container_logs.name,
-    pattern='{ $.involvedObject.kind = "Job" && ($.reason = "BackoffLimitExceeded" || $.reason = "DeadlineExceeded") }',
-    metric_transformation=aws.cloudwatch.LogMetricFilterMetricTransformationArgs(
+# the Job's event as a JSON line. One filter and alarm per CronJob, so the
+# alarm's name says which job failed; one-offs created from a CronJob
+# (`<cronjob>-manual-...`) count as it. Any other Job is `other`. The names
+# must match the apps stack's CronJobs; a new CronJob without an entry here
+# still alarms, as `other`.
+JOB_NAMES = ("silver", "embed", "index", "labels", "reports")
+_job_failed_event = '$.involvedObject.kind = "Job" && ($.reason = "BackoffLimitExceeded" || $.reason = "DeadlineExceeded")'
+
+
+def _job_failed_alarm(job: str, match: str, description: str) -> aws.cloudwatch.MetricAlarm:
+    metric = f"JobFailures-{job}"
+    metric_filter = aws.cloudwatch.LogMetricFilter(
+        f"job-failures-{job}",
+        name=f"bsky-job-failures-{job}",
+        log_group_name=container_logs.name,
+        pattern=f"{{ {_job_failed_event} && {match} }}",
+        metric_transformation=aws.cloudwatch.LogMetricFilterMetricTransformationArgs(
+            namespace=SILVER_METRIC_NAMESPACE,
+            name=metric,
+            value="1",
+            default_value="0",
+        ),
+    )
+    return aws.cloudwatch.MetricAlarm(
+        f"job-failed-{job}",
+        name=f"bsky-job-failed-{job}",
+        alarm_description=description,
         namespace=SILVER_METRIC_NAMESPACE,
-        name="JobFailures",
-        value="1",
-        default_value="0",
-    ),
-)
-job_failed = aws.cloudwatch.MetricAlarm(
-    "job-failed",
-    name="bsky-job-failed",
-    alarm_description="A Job in bsky failed (BackoffLimitExceeded or DeadlineExceeded): see kubectl -n bsky get jobs",
-    namespace=SILVER_METRIC_NAMESPACE,
-    metric_name="JobFailures",
-    statistic="Sum",
-    period=300,
-    evaluation_periods=1,
-    comparison_operator="GreaterThanOrEqualToThreshold",
-    threshold=1,
-    # No log lines in five minutes is the normal case.
-    treat_missing_data="notBreaching",
-    alarm_actions=[alerts.arn],
-    ok_actions=[alerts.arn],
-    opts=pulumi.ResourceOptions(depends_on=[job_failures]),
+        metric_name=metric,
+        statistic="Sum",
+        period=300,
+        evaluation_periods=1,
+        comparison_operator="GreaterThanOrEqualToThreshold",
+        threshold=1,
+        # No log lines in five minutes is the normal case.
+        treat_missing_data="notBreaching",
+        alarm_actions=[alerts.arn],
+        ok_actions=[alerts.arn],
+        opts=pulumi.ResourceOptions(depends_on=[metric_filter]),
+    )
+
+
+job_failed = {
+    job: _job_failed_alarm(
+        job,
+        f'$.involvedObject.name = "{job}-*"',
+        f"A {job} Job in bsky failed (BackoffLimitExceeded or DeadlineExceeded): "
+        f"kubectl -n bsky get jobs -l app.kubernetes.io/name={job}, then its pod logs in /bsky/containers",
+    )
+    for job in JOB_NAMES
+}
+job_failed["other"] = _job_failed_alarm(
+    "other",
+    " && ".join(f'$.involvedObject.name != "{job}-*"' for job in JOB_NAMES),
+    "A Job in bsky that no CronJob alarm covers failed (BackoffLimitExceeded or DeadlineExceeded): "
+    "see kubectl -n bsky get jobs",
 )
 
 # Account-wide: filtering by the project tag would need cost allocation tags

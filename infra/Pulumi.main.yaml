@@ -11,13 +11,10 @@ config:
   # BSKY_WAREHOUSE_BUCKET in .env).
   bsky-data-lake:createBuckets: "true"
   bsky-data-lake:manageIam: "true"
-  # No table optimizers until the tables exist (the loader and the phase E copy
-  # create them); restore the defaults then.
-  bsky-data-lake:optimizedTables: []
-  bsky-data-lake:optimizedSilverTables: []
-  # Job alarms notify only once their CronJobs run (phase E of the move).
-  bsky-data-lake:embedAlarmActions: "false"
-  bsky-data-lake:labelsAlarmActions: "false"
+  # Job alarms notify (phase E of the move: the copied tables exist and the jobs run).
+  bsky-data-lake:embedAlarmActions: "true"
+  bsky-data-lake:indexAlarmActions: "true"
+  bsky-data-lake:labelsAlarmActions: "true"
   # WP M5: the copy job's role (reads the old warehouse named in .env).
   bsky-data-lake:migrationRole: "true"
 encryptionsalt: v1:s7ettW5UL40=:v1:EKsc8xPXxR/BWg9F:ewcMdDovZv55GE4uZMX6AEA3+lHHWA==

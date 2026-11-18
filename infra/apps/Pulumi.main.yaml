@@ -15,12 +15,12 @@ config:
   # Phase D: the new account ingests alongside the old one.
   bsky-apps:ingestReplicas: "1"
   bsky-apps:loaderReplicas: "1"
-  bsky-apps:silverSuspend: "true"
-  bsky-apps:embedSuspend: "true"
-  bsky-apps:labelsSuspend: "true"
-  bsky-apps:indexSuspend: "true"
-  bsky-apps:reportsSuspend: "true"
-  bsky-apps:searchReplicas: "0"
+  bsky-apps:silverSuspend: "false"
+  bsky-apps:embedSuspend: "false"
+  bsky-apps:labelsSuspend: "false"
+  bsky-apps:indexSuspend: "false"
+  bsky-apps:reportsSuspend: "false"
+  bsky-apps:searchReplicas: "1"
   # The copy job (migrate/); its CronJobs appear once BSKY_MIGRATION_PLAN_FILE exists.
-  bsky-apps:migrationImageTag: a706bb7
+  bsky-apps:migrationImageTag: m5-20261118b
 encryptionsalt: v1:O/LEWOFdOS0=:v1:c0cc0Jr0Us+9vUCY:+grEkgU9H0ygHzsziUvZwGB18UjnAA==

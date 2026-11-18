@@ -79,7 +79,7 @@ The account budget `bsky-monthly` is $250 (deployment plan, D6).
 
 ## WP M5: move the workloads out of the management account
 
-- **Status: in progress (2026-11-16). Option 2 chosen:** a member account for the data lake. Phases A–C are done. Phase D (the new account ingesting alongside the old) has run since T0, 2026-11-16 17:34Z. Phase E (freeze, copy, switch) is planned for the evening of 2026-11-17, Mountain time. Nothing has been copied yet, and the old pipeline still runs unchanged.
+- **Status: in progress (2026-11-16). Option 2 chosen:** a member account for the data lake. Phases A–C are done. Phase D (the new account ingesting alongside the old) ran from T0, 2026-11-16 17:34Z. **Phase E is done (2026-11-18 15:20Z):** the lake was copied and verified, every job runs in the new account, and the old ingest is stopped. Phase F (decommissioning the old account's workloads) is due about 2026-12-02.
 - **Why:** the data lake runs in the AWS Organization's management account, the account that owns the organization and pays the bill. AWS recommends keeping the management account free of workloads:
   - Service control policies (SCPs, the organization-wide guardrails) don't apply to the management account, so they can't limit what its roles do.
   - A credential leaked from a workload in the management account sits next to control of the whole organization: accounts, billing and IAM Identity Center.
@@ -210,6 +210,22 @@ Run across a night, Mountain time: steps 1–3 in the evening, the copy while no
 7. **Stop the old ingestor and loader.**
 
 **Rollback until step 7:** unsuspend the old CronJobs. The old account has missed nothing, because its ingest never stopped.
+
+- **Progress (2026-11-17/18, all times UTC):**
+  1. **Freeze, 11-17 23:59:53:** the five old CronJobs were suspended with `kubectl patch` while none was running. **W = 2026-11-17 23:04:10.122046Z,** the old silver's last `bronze_through`. The old `dev` apps stack now differs from its cluster, so don't `pulumi up` it before phase F: that would unsuspend the old jobs.
+  2. **Plan:** 15 tables (bronze and 14 silver) and two object prefixes, written right after the freeze. Apps `main` applied with the three suspended migrate CronJobs.
+  3. **Copy, 11-18 00:03 to 06:07:**
+     - **Objects:** `lance/` (2,010 objects, 157 GB) and `reports/inputs/` copied in under 3 minutes.
+     - **Tables:** three problems, each fixed before data was lost:
+       - **The resume logic cleared the new loader's bronze.** The copy writes into the table the new loader has filled since T0, and treated every unmarked hour as a crashed copy. It replaced the new loader's rows from 11-16 17:00 to 11-17 11:00 with the old loader's copies of the same events before it was stopped at 00:58. All of those rows are from before W, so silver wasn't affected. Fix: bronze is a live destination, and the copy never deletes there (image `m5-20261118`).
+       - **pyiceberg's batch reader ran out of memory** on likes' 2026-11-04, 44M rows, twice a normal day. It submits every file of a scan to its thread pool at once, and finished files pile up ahead of the writer. Fix: read one file at a time (image `m5-20261118b`, about 4–5 GB on that day). A Job retrying with Karpenter launching and removing a node for each pod used about 1½ hours before this was found.
+       - **Commits of 2M rows ran out of memory on `post_embeddings`,** with a vector per row. The rest ran with `--rows-per-commit 250000`, at 2.3–2.7 GB.
+  4. **Verify, 06:10:** `ok` on all 15 tables. Silver matches row for row (likes 422.5M, post_edges 551.5M, post_embeddings 51.5M, silver_runs 1,477). Bronze holds 663.7M rows against 630.2M in the source, with no hour short; the extra rows are the new loader's.
+  5. **Data stack, about 15:10:** 36 Glue optimizers, and alarm actions on for embed, labels and index. The old stack never turned index's on.
+  6. **Jobs, 15:13–15:18:** unsuspended, and search at 1 replica.
+     - Silver resumed exactly at W and caught up from there; its first windows over the doubled day appended about half the usual rows per window, as the anti-join drops the second copy. Embed, index (the copied 50.5M-row dataset) and labels (after seq 46,146,033) continued from their copied state.
+     - **Unsuspending a CronJob runs its last missed schedule at once,** so don't also start one by hand. A second silver run was started and deleted before its pod began.
+  7. **Old ingest stopped, 15:19:40 and 15:20:34:** the ingestor, then the loader after its last commit (15:20:10), both scaled to 0 with `kubectl`. The old account's stalled alarms fire from here until phase F. Its reports-web, search and event-exporter still run.
 
 ### Phase F: decommission the old account's workloads (about two weeks after E)
 

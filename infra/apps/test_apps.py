@@ -304,6 +304,7 @@ def test_index_cronjob_starts_suspended_and_writes_lance():
         assert pod["service_account_name"] == "index"
         (container,) = pod["containers"]
         assert container["image"] == f"{SEARCH_REPO_URL}:aaa3333" and container["command"] == ["bsky-index"]
+        assert container["args"] == ["--merge-text-hour", "10"]
         env = {e["name"]: e.get("value") for e in container["env"]}
         assert env["BSKY_LANCE_URI"] == "s3://test-warehouse/lance"
         assert env["BSKY_SILVER_LOCATION"] == STACK_OUTPUTS["silver_location"]

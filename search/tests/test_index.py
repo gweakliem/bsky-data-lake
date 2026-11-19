@@ -221,3 +221,25 @@ def test_maintain_updates_every_index_prunes_versions_and_profiles_each_step(cat
     assert all(p["seconds"] >= 0 for p in profile.phases.values())
 
 
+def test_text_index_keeps_a_base_and_one_delta_until_merged(cat, db):
+    posts = [(f"at://a/{i}", t(1 + i)) for i in range(3)]
+    fake.add_posts(cat, posts, TEXT)
+    fake.add_runs(cat, t(5))
+    add_embeddings(cat, [(u, m, i) for i, (u, m) in enumerate(posts)])
+    build(cat, db, maintain_indexes=True)
+    for hour in range(3):  # three hourly runs, each with new posts
+        more = [(f"at://b/{hour}-{i}", t(10 + 10 * hour + i)) for i in range(2)]
+        fake.add_posts(cat, more, TEXT)
+        fake.add_runs(cat, t(19 + 10 * hour))
+        add_embeddings(cat, [(u, m, 10 + 2 * hour + i) for i, (u, m) in enumerate(more)])
+        build(cat, db, maintain_indexes=True)
+    table = db.open_table(store.TABLE)
+    s = table.index_stats(index.TEXT_INDEX_NAME)
+    assert (s.num_indices, s.num_indexed_rows, s.num_unindexed_rows) == (2, 9, 0)
+    assert table.search("indexed", query_type="fts").limit(20).to_arrow().num_rows == 9
+    assert index.merge_text_index(table) == 2  # nothing new, still merges
+    s = table.index_stats(index.TEXT_INDEX_NAME)
+    assert (s.num_indices, s.num_indexed_rows) == (1, 9)
+    assert table.search("indexed", query_type="fts").limit(20).to_arrow().num_rows == 9
+    assert index.merge_text_index(table) == 1  # already one segment: nothing to do
+

@@ -32,6 +32,7 @@ import json
 import logging
 import math
 import resource
+import subprocess
 import os
 import sys
 import threading
@@ -64,6 +65,13 @@ TRAIN_SAMPLE_RATE = 64
 # (the trained base) are merged into one. lancedb's optimize() can't merge; pylance can.
 MAX_VECTOR_DELTAS = 2
 VECTOR_INDEX = "vector_idx"
+# Folding new rows into the full-text index rewrites all of it: about 140 MB a million rows
+# (7 GB and 7.5 min at 55M rows, 2026-11-19), for an hour's 150k new rows. So new rows go
+# into a delta segment instead (base + one delta, flat at about 80 MB), and once a day
+# `--merge-text-hour` folds the delta into the base, in a process of its own so its peak
+# doesn't stack on what the rest of the run holds. Across segments, BM25 scores are per
+# segment: on E1's corpus, 99.6% of text and 98.8% of hybrid top-10 results were unchanged.
+TEXT_INDEX_NAME = "text_idx"
 DELETE_BATCH = 1000
 # Memory is about 10 KB a row while a span is joined (dry run: 1.8 GB at 100k rows),
 # so a span with more rows is split by time. An ingest catch-up after an outage puts
@@ -422,10 +430,38 @@ def maintain(table, reindex: bool = False, profile: Profile | None = None) -> No
         ds.cleanup_old_versions(older_than=VERSION_RETENTION)
     for name in sorted(i.name for i in table.list_indices()):
         with profile.phase(f"update {name}"):
-            ds.optimize.optimize_indices(index_names=[name])  # new rows in; a vector index gains a delta
+            if name == TEXT_INDEX_NAME:
+                # into the delta: num_indices_to_merge=0 starts one, 1 folds into the newest
+                ds.optimize.optimize_indices(index_names=[name], num_indices_to_merge=0 if text_segments(table) == 1 else 1)
+            else:
+                ds.optimize.optimize_indices(index_names=[name])  # new rows in; a vector index gains a delta
     table.checkout_latest()
     with profile.phase("merge vector deltas"):
         merge_vector_deltas(table)
+
+
+def text_segments(table) -> int:
+    return table.index_stats(TEXT_INDEX_NAME).num_indices
+
+
+def merge_text_index(table, profile: Profile | None = None) -> int:
+    """Fold the full-text index's segments into one; returns how many there were."""
+    profile = profile or Profile()
+    n = text_segments(table)
+    if n > 1:
+        with profile.phase("merge text"):
+            # an explicit count: the default does nothing when no rows are new
+            table.to_lance().optimize.optimize_indices(index_names=[TEXT_INDEX_NAME], num_indices_to_merge=n)
+        table.checkout_latest()
+    log.info("text index: %d segment(s) -> %d", n, text_segments(table))
+    return n
+
+
+def merge_text_in_child() -> None:
+    """Run `--merge-text` as a child process, so its memory is returned before the hourly work."""
+    r = subprocess.run([sys.executable, "-m", "bsky_search.index", "--merge-text"])
+    if r.returncode:
+        raise SystemExit(f"text index merge failed (exit {r.returncode})")
 
 
 def merge_vector_deltas(table, keep: int = MAX_VECTOR_DELTAS) -> int:
@@ -459,6 +495,10 @@ def main() -> None:
                         help="drop the index and load it again from post_embeddings, leaving out deleted and "
                              "superseded posts up front (no table deletes); then run --reindex")
     parser.add_argument("--reindex", action="store_true", help="retrain the vector index on the current rows")
+    parser.add_argument("--merge-text", action="store_true",
+                        help="only fold the full-text index's delta into its base, then exit (about 140 MB a million rows)")
+    parser.add_argument("--merge-text-hour", type=int, metavar="H",
+                        help="in a run starting in UTC hour H, first run --merge-text in a child process")
     parser.add_argument("--no-maintain", action="store_true", help="skip index upkeep and compaction (backfill passes)")
     parser.add_argument("--dry-run", action="store_true", help="read and count only: no writes")
     args = parser.parse_args()
@@ -471,6 +511,13 @@ def main() -> None:
     load_dotenv(lake.REPO / ".env")
     start = time.monotonic()
     profile = Profile()
+    if args.merge_text:
+        merged = merge_text_index(store.connect().open_table(store.TABLE), profile)
+        log.info("run %s", json.dumps({"merge_text": merged, "seconds": round(time.monotonic() - start, 1),
+                                       "peak_rss_mb": round(_peak_rss_mb()), "phases": profile.phases}))
+        return
+    if args.merge_text_hour is not None and dt.datetime.now(dt.UTC).hour == args.merge_text_hour and not args.dry_run:
+        merge_text_in_child()
     stats = run(inc.catalog(), store.connect(), today=dt.datetime.now(dt.UTC).date(), namespace=args.namespace, profile=profile,
                 span_minutes=args.span_minutes, max_span_rows=args.max_span_rows, max_spans=args.max_spans, dry_run=args.dry_run,
                 maintain_indexes=not args.no_maintain, reindex=args.reindex, rebuild=args.rebuild)

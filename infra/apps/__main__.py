@@ -547,6 +547,11 @@ lance_uri = data.require_output("lance_uri")
 # An hour of posts (about 185k rows, 380 MB of vectors) plus the join and the
 # index upkeep. Not yet measured in the cluster.
 index_memory_limit = config.get("indexMemoryLimit") or "8Gi"
+# Once a day (the run starting in this UTC hour) the job first folds the full-text index's
+# delta into its base, in a child process, before the hourly work (search/CLAUDE.md).
+index_merge_text_hour = config.get_int("indexMergeTextHour")
+if index_merge_text_hour is None:
+    index_merge_text_hour = 10
 # Suspended until the initial build (a one-off Job) has run.
 index_suspend = config.get_bool("indexSuspend", True)
 # The API holds the IVF-PQ codes (64 bytes a row, about 5.6 GB for 30 days at
@@ -603,6 +608,7 @@ index = k8s.batch.v1.CronJob(
                                 name="index",
                                 image=search_image,
                                 command=["bsky-index"],
+                                args=["--merge-text-hour", str(index_merge_text_hour)],
                                 env=[
                                     k8s.core.v1.EnvVarArgs(
                                         name="BSKY_SILVER_LOCATION", value=data.require_output("silver_location")

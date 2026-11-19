@@ -178,7 +178,8 @@ kubectl -n bsky create job --from=cronjob/silver silver-manual-$(date +%s)
 The report site (`reports/`: pipeline health, activity, languages) is built hourly at `:30` by the CronJob `reports`, which queries the lake with DuckDB, builds the static site and uploads it to `s3://<warehouse>/reports/builds/<time>/`, then points `reports/current` at it (the last 3 builds are kept). The Deployment `reports-web` serves it: a `sync` sidecar checks `reports/current` every minute and swaps in a new build, and nginx serves the local copy. A failed build exits non-zero before uploading anything, so the previous site stays up.
 
 ```bash
-(cd infra/apps && pulumi stack output reports_url --stack dev)   # the public address
+kubectl -n bsky get svc reports-web -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'   # the public address (http://, login in reports-htpasswd)
+(cd infra/apps && pulumi stack output reports_url --stack main)  # the same, from Pulumi (needs the infra/CLAUDE.md env vars)
 kubectl -n bsky create job --from=cronjob/reports reports-manual-$(date +%s)   # build now
 kubectl -n bsky logs job/<job-name> -f                   # the build's output
 kubectl -n bsky logs deploy/reports-web -c sync          # "serving build ..." when a new build is picked up

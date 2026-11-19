@@ -32,10 +32,13 @@ import json
 import logging
 import math
 import resource
+import os
 import sys
+import threading
 import time
 from collections.abc import Iterator
-from dataclasses import asdict, dataclass
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass, field
 
 import lancedb
 import numpy as np
@@ -80,6 +83,54 @@ class Stats:
     deleted: int = 0  # rows removed because the post was deleted
     expired: int = 0
     rows: int = 0  # in the index at the end
+
+
+def _rss_mb() -> float | None:
+    """Current resident memory, on Linux (where the job runs); None elsewhere."""
+    try:
+        with open("/proc/self/statm") as f:
+            return int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE") / 2**20
+    except OSError:
+        return None
+
+
+@dataclass
+class Profile:
+    """Time and peak resident memory per phase of a run, to see which step needs the memory.
+
+    ru_maxrss is only the process's high-water mark, so a thread samples current RSS
+    every `interval` seconds instead.
+    """
+
+    interval: float = 0.5
+    phases: dict[str, dict] = field(default_factory=dict)
+
+    @contextmanager
+    def phase(self, name: str):
+        start_rss, peak, stop = _rss_mb(), [_rss_mb() or 0.0], threading.Event()
+
+        def sample():
+            while not stop.wait(self.interval):
+                peak[0] = max(peak[0], _rss_mb() or 0.0)
+
+        sampler = threading.Thread(target=sample, daemon=True)
+        sampler.start()
+        start = time.monotonic()
+        try:
+            yield
+        finally:
+            stop.set()
+            sampler.join()
+            end_rss = _rss_mb()
+            p = {"seconds": round(time.monotonic() - start, 1), "start_mb": _round(start_rss),
+                 "peak_mb": _round(max(peak[0], end_rss or 0.0) if start_rss is not None else None),
+                 "end_mb": _round(end_rss)}
+            self.phases[name] = p
+            log.info("phase %s: %s", name, json.dumps(p))
+
+
+def _round(mb: float | None) -> int | None:
+    return None if mb is None else round(mb)
 
 
 def exists(db: lancedb.DBConnection, name: str) -> bool:
@@ -261,7 +312,9 @@ def run(
     maintain_indexes: bool = True,
     reindex: bool = False,
     rebuild: bool = False,
+    profile: Profile | None = None,
 ) -> Stats:
+    profile = profile or Profile()
     stats = Stats()
     first_day = store.cutoff(today)
     emb_through = inc.committed_through(cat.load_table(f"{namespace}.{EMBEDDINGS}"))
@@ -283,6 +336,21 @@ def run(
     if rebuild and emb_through is not None:
         superseded = Superseded.read(cat, inc.Window(start, emb_through), namespace)
         log.info("rebuild: %d deleted posts and %d edited posts to leave out", len(superseded.deleted), len(superseded.newest))
+    with profile.phase("spans"):
+        _index_spans(cat, db, table, stats, start, emb_through, first_day, namespace, span_minutes, max_span_rows,
+                     max_spans, dry_run, superseded)
+    table = db.open_table(store.TABLE) if exists(db, store.TABLE) else None
+    if table is not None and not dry_run:
+        with profile.phase("expire"):
+            stats.expired = table.delete(f"day < date '{first_day.isoformat()}'").num_deleted_rows
+        if maintain_indexes:
+            maintain(table, reindex=reindex, profile=profile)
+        stats.rows = table.count_rows()
+    return stats
+
+
+def _index_spans(cat, db, table, stats, start, emb_through, first_day, namespace, span_minutes, max_span_rows,
+                 max_spans, dry_run, superseded) -> None:
     if emb_through is not None:
         for w in (piece for span in spans(inc.windows(cat, start, namespace), emb_through, span_minutes)
                   for piece in split(cat, span, max_span_rows, namespace)):
@@ -306,16 +374,9 @@ def run(
                 if table is not None and gone:
                     stats.deleted += delete_uris(table, gone)
                 record(db, w.through, rows.num_rows, len(gone))
-                after = w.through
                 log.info("span (%s, %s]: %d rows committed, %d so far", w.after, w.through, rows.num_rows, stats.appended)
             if max_spans is not None and stats.spans >= max_spans:
                 break
-    if table is not None and not dry_run:
-        stats.expired = table.delete(f"day < date '{first_day.isoformat()}'").num_deleted_rows
-        if maintain_indexes:
-            maintain(table, reindex=reindex)
-        stats.rows = table.count_rows()
-    return stats
 
 
 def record(db: lancedb.DBConnection, through: dt.datetime, appended: int, deleted: int) -> None:
@@ -334,22 +395,37 @@ def record(db: lancedb.DBConnection, through: dt.datetime, appended: int, delete
 VERSION_RETENTION = dt.timedelta(hours=2)
 
 
-def maintain(table, reindex: bool = False) -> None:
-    """Create missing indexes, fold new rows into existing ones, compact, and drop old versions."""
+def maintain(table, reindex: bool = False, profile: Profile | None = None) -> None:
+    """Create missing indexes, fold new rows into existing ones, compact, and drop old versions.
+
+    The three parts of lancedb's optimize() (compact, prune, update indexes) are run one at a
+    time through pylance, each index on its own, so the run log shows what each one costs.
+    """
+    profile = profile or Profile()
     names = {i.columns[0]: i.index_type for i in table.list_indices()}
     for column, config in [*SCALAR.items(), ("text", TEXT_INDEX)]:
         if column not in names:
-            table.create_index(column, config=config)
+            with profile.phase(f"create {column}"):
+                table.create_index(column, config=config)
     n = table.count_rows()
     if n >= MIN_VECTOR_INDEX_ROWS and ("vector" not in names or reindex):
         partitions = max(1, round(math.sqrt(n)))
         log.info("training IVF-PQ on %d rows: %d partitions, %d sub-vectors", n, partitions, SUB_VECTORS)
         # k-means trains on sample_rate rows per partition: 64 keeps it to about 0.8 GB of float16 at 37M rows (256 is 4x).
-        table.create_index("vector", config=IvfPq(distance_type="cosine", num_partitions=partitions,
-                                                  num_sub_vectors=SUB_VECTORS, sample_rate=TRAIN_SAMPLE_RATE))
-    # Compaction, new rows into every index, and versions older than VERSION_RETENTION.
-    table.optimize(cleanup_older_than=VERSION_RETENTION)
-    merge_vector_deltas(table)
+        with profile.phase("train vector"):
+            table.create_index("vector", config=IvfPq(distance_type="cosine", num_partitions=partitions,
+                                                      num_sub_vectors=SUB_VECTORS, sample_rate=TRAIN_SAMPLE_RATE))
+    ds = table.to_lance()
+    with profile.phase("compact"):
+        ds.optimize.compact_files()
+    with profile.phase("cleanup"):
+        ds.cleanup_old_versions(older_than=VERSION_RETENTION)
+    for name in sorted(i.name for i in table.list_indices()):
+        with profile.phase(f"update {name}"):
+            ds.optimize.optimize_indices(index_names=[name])  # new rows in; a vector index gains a delta
+    table.checkout_latest()
+    with profile.phase("merge vector deltas"):
+        merge_vector_deltas(table)
 
 
 def merge_vector_deltas(table, keep: int = MAX_VECTOR_DELTAS) -> int:
@@ -394,12 +470,14 @@ def main() -> None:
 
     load_dotenv(lake.REPO / ".env")
     start = time.monotonic()
-    stats = run(inc.catalog(), store.connect(), today=dt.datetime.now(dt.UTC).date(), namespace=args.namespace,
+    profile = Profile()
+    stats = run(inc.catalog(), store.connect(), today=dt.datetime.now(dt.UTC).date(), namespace=args.namespace, profile=profile,
                 span_minutes=args.span_minutes, max_span_rows=args.max_span_rows, max_spans=args.max_spans, dry_run=args.dry_run,
                 maintain_indexes=not args.no_maintain, reindex=args.reindex, rebuild=args.rebuild)
     r = resource.getrusage(resource.RUSAGE_SELF)
     out = asdict(stats) | {"dry_run": args.dry_run, "seconds": round(time.monotonic() - start, 1),
-                           "cpu_seconds": round(r.ru_utime + r.ru_stime, 1), "peak_rss_mb": round(_peak_rss_mb())}
+                           "cpu_seconds": round(r.ru_utime + r.ru_stime, 1), "peak_rss_mb": round(_peak_rss_mb()),
+                           "phases": profile.phases}
     log.info("run %s", json.dumps(out))  # one line per run, as bsky-embed's
 
 

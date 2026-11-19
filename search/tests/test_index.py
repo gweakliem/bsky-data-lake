@@ -194,25 +194,30 @@ def test_merge_vector_deltas_keeps_the_base_and_one_delta(db):
     assert len(table.search(batch(0, 1)["vector"][0].as_py()).limit(5).to_list()) == 5
 
 
-def test_maintenance_keeps_only_two_hours_of_versions():
-    from bsky_search import index
+def test_maintain_updates_every_index_prunes_versions_and_profiles_each_step(cat, db, monkeypatch):
+    posts = [(f"at://a/{i}", t(1 + i)) for i in range(4)]
+    fake.add_posts(cat, posts, TEXT)
+    fake.add_runs(cat, t(10))
+    add_embeddings(cat, [(u, m, i) for i, (u, m) in enumerate(posts)])
+    build(cat, db)
+    table = db.open_table(store.TABLE)  # too few rows for IVF-PQ (merge_vector_deltas has its own test)
+    profile = index.Profile()
+    index.maintain(table, profile=profile)  # creates the scalar and text indexes
+    more = [(f"at://b/{i}", t(20 + i)) for i in range(3)]
+    fake.add_posts(cat, more, TEXT)
+    fake.add_runs(cat, t(30))
+    add_embeddings(cat, [(u, m, 10 + i) for i, (u, m) in enumerate(more)])
+    build(cat, db)
+    table = db.open_table(store.TABLE)
+    before = len(table.list_versions())
+    monkeypatch.setattr(index, "VERSION_RETENTION", dt.timedelta(0))
+    index.maintain(table, profile=profile)
+    for i in table.list_indices():
+        s = table.index_stats(i.name)
+        assert (s.num_indexed_rows, s.num_unindexed_rows) == (7, 0), i.name
+    assert len(table.list_versions()) < before
+    assert table.search("indexed", query_type="fts").limit(10).to_arrow().num_rows == 7
+    assert {"compact", "cleanup", "update uri_idx", "update text_idx", "merge vector deltas"} <= set(profile.phases)
+    assert all(p["seconds"] >= 0 for p in profile.phases.values())
 
-    class Table:
-        def __init__(self):
-            self.cleanup = None
 
-        def list_indices(self):
-            return []
-
-        def count_rows(self):
-            return 10  # below the vector index's threshold
-
-        def create_index(self, column, config):
-            pass
-
-        def optimize(self, cleanup_older_than=None):
-            self.cleanup = cleanup_older_than
-
-    t = Table()
-    index.maintain(t)
-    assert t.cleanup == dt.timedelta(hours=2)

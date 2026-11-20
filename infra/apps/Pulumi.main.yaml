@@ -8,10 +8,10 @@ config:
   bsky-apps:reportsImageTag: b9e249c
   bsky-apps:labelsImageTag: 00c3b94-labels
   bsky-apps:embedImageTag: 04481b5
-  bsky-apps:searchImageTag: e3-20261119-ftsdelta
+  bsky-apps:searchImageTag: e3-20261120-dailycompact
   bsky-apps:reportsMemoryLimit: 12Gi
   bsky-apps:reportsDuckdbMemory: 10GB
-  bsky-apps:indexMemoryLimit: 12Gi
+  bsky-apps:indexMemoryLimit: 16Gi
   # Phase D: the new account ingests alongside the old one.
   bsky-apps:ingestReplicas: "1"
   bsky-apps:loaderReplicas: "1"

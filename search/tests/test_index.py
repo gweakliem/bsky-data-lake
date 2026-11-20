@@ -217,7 +217,8 @@ def test_maintain_updates_every_index_prunes_versions_and_profiles_each_step(cat
         assert (s.num_indexed_rows, s.num_unindexed_rows) == (7, 0), i.name
     assert len(table.list_versions()) < before
     assert table.search("indexed", query_type="fts").limit(10).to_arrow().num_rows == 7
-    assert {"compact", "cleanup", "update uri_idx", "update text_idx", "merge vector deltas"} <= set(profile.phases)
+    assert {"cleanup", "update uri_idx", "update text_idx", "merge vector deltas"} <= set(profile.phases)
+    assert "compact" not in profile.phases  # once a day, in its own process
     assert all(p["seconds"] >= 0 for p in profile.phases.values())
 
 
@@ -243,3 +244,29 @@ def test_text_index_keeps_a_base_and_one_delta_until_merged(cat, db):
     assert table.search("indexed", query_type="fts").limit(20).to_arrow().num_rows == 9
     assert index.merge_text_index(table) == 1  # already one segment: nothing to do
 
+
+
+def test_compact_merges_the_hourly_fragments_and_keeps_every_index_whole(cat, db):
+    posts = [(f"at://a/{i}", t(1 + i)) for i in range(3)]
+    fake.add_posts(cat, posts, TEXT)
+    fake.add_runs(cat, t(5))
+    add_embeddings(cat, [(u, m, i) for i, (u, m) in enumerate(posts)])
+    build(cat, db, maintain_indexes=True)
+    for hour in range(3):  # three hourly runs, each appending a small fragment
+        more = [(f"at://b/{hour}-{i}", t(10 + 10 * hour + i)) for i in range(2)]
+        fake.add_posts(cat, more, TEXT)
+        fake.add_runs(cat, t(19 + 10 * hour))
+        add_embeddings(cat, [(u, m, 10 + 2 * hour + i) for i, (u, m) in enumerate(more)])
+        build(cat, db, maintain_indexes=True)
+    table = db.open_table(store.TABLE)
+    before = len(table.to_lance().get_fragments())
+    assert before > 1  # maintain() no longer compacts
+    index.merge_text_index(table)
+    removed, added = index.compact(table)
+    assert (removed, added) == (before, 1)
+    assert len(table.to_lance().get_fragments()) == 1
+    for i in table.list_indices():
+        s = table.index_stats(i.name)
+        assert (s.num_indexed_rows, s.num_unindexed_rows) == (9, 0), i.name
+    assert table.search("indexed", query_type="fts").limit(20).to_arrow().num_rows == 9
+    assert table.search().where("uri = 'at://b/2-1'").limit(5).to_arrow().num_rows == 1

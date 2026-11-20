@@ -10,9 +10,10 @@ one span of silver windows at a time (about an hour, `--span-minutes`):
 3. Record the span in the runs table. A crash before this leaves rows newer
    than the state, which the next run deletes before it starts again.
 
-Then it drops days older than the window, keeps the indexes current (full-text,
-the scalar filter columns, IVF-PQ on the vectors once there are enough rows)
-and compacts. A single writer is assumed: the CronJob forbids overlapping runs.
+Then it drops days older than the window and keeps the indexes current (full-text,
+the scalar filter columns, IVF-PQ on the vectors once there are enough rows). Once a
+day (`--daily-hour`) it first merges the full-text segments and compacts, each in a
+child process. A single writer is assumed: the CronJob forbids overlapping runs.
 
     uv run bsky-index --dry-run       # what a run would read; no writes
     uv run bsky-index                 # until caught up with post_embeddings
@@ -68,7 +69,7 @@ VECTOR_INDEX = "vector_idx"
 # Folding new rows into the full-text index rewrites all of it: about 140 MB a million rows
 # (7 GB and 7.5 min at 55M rows, 2026-11-19), for an hour's 150k new rows. So new rows go
 # into a delta segment instead (base + one delta, flat at about 80 MB), and once a day
-# `--merge-text-hour` folds the delta into the base, in a process of its own so its peak
+# `--daily-hour` folds the delta into the base, in a process of its own so its peak
 # doesn't stack on what the rest of the run holds. Across segments, BM25 scores are per
 # segment: on E1's corpus, 99.6% of text and 98.8% of hybrid top-10 results were unchanged.
 TEXT_INDEX_NAME = "text_idx"
@@ -401,13 +402,22 @@ def record(db: lancedb.DBConnection, through: dt.datetime, appended: int, delete
 # next to 136 GB of data (2026-11-16). The API reopens the dataset every minute
 # (read_consistency_interval) and is the only other reader, so two hours is ample.
 VERSION_RETENTION = dt.timedelta(hours=2)
+# Compaction rewrites every index to the merged fragments' new row addresses, whatever it
+# merges: at 57M rows, folding about 1M rows into one fragment wrote 4.4 GB of full-text,
+# 2.5 GB of uri BTree and 4 GB of vector index, 10 min and an 8 GB peak (2026-11-20). An
+# hourly append is one small fragment, so compacting once a day costs one of those instead
+# of the two to four a day that compacting each hour made. Deferring the remap
+# (defer_index_remap) leaves a fragment-reuse history that can't be trimmed while the base
+# vector index covers rewritten fragments, which expiry keeps doing, and that history made
+# a local full-text merge 7x slower within 36 hourly runs.
 
 
 def maintain(table, reindex: bool = False, profile: Profile | None = None) -> None:
-    """Create missing indexes, fold new rows into existing ones, compact, and drop old versions.
+    """Create missing indexes, drop old versions, and fold new rows into existing indexes.
 
-    The three parts of lancedb's optimize() (compact, prune, update indexes) are run one at a
-    time through pylance, each index on its own, so the run log shows what each one costs.
+    Two of the three parts of lancedb's optimize() (prune, update indexes) are run through
+    pylance, each index on its own, so the run log shows what each one costs. The third,
+    compaction, is `compact`, once a day.
     """
     profile = profile or Profile()
     names = {i.columns[0]: i.index_type for i in table.list_indices()}
@@ -424,8 +434,6 @@ def maintain(table, reindex: bool = False, profile: Profile | None = None) -> No
             table.create_index("vector", config=IvfPq(distance_type="cosine", num_partitions=partitions,
                                                       num_sub_vectors=SUB_VECTORS, sample_rate=TRAIN_SAMPLE_RATE))
     ds = table.to_lance()
-    with profile.phase("compact"):
-        ds.optimize.compact_files()
     with profile.phase("cleanup"):
         ds.cleanup_old_versions(older_than=VERSION_RETENTION)
     for name in sorted(i.name for i in table.list_indices()):
@@ -457,11 +465,21 @@ def merge_text_index(table, profile: Profile | None = None) -> int:
     return n
 
 
-def merge_text_in_child() -> None:
-    """Run `--merge-text` as a child process, so its memory is returned before the hourly work."""
-    r = subprocess.run([sys.executable, "-m", "bsky_search.index", "--merge-text"])
+def compact(table, profile: Profile | None = None) -> tuple[int, int]:
+    """Merge small and deletion-heavy fragments, remapping every index; returns (removed, added)."""
+    profile = profile or Profile()
+    with profile.phase("compact"):
+        m = table.to_lance().optimize.compact_files()
+    table.checkout_latest()
+    log.info("compaction: %d fragments -> %d", m.fragments_removed, m.fragments_added)
+    return m.fragments_removed, m.fragments_added
+
+
+def in_child(flag: str) -> None:
+    """Run `bsky-index <flag>` as a child process, so its memory is returned before the hourly work."""
+    r = subprocess.run([sys.executable, "-m", "bsky_search.index", flag])
     if r.returncode:
-        raise SystemExit(f"text index merge failed (exit {r.returncode})")
+        raise SystemExit(f"{flag} failed (exit {r.returncode})")
 
 
 def merge_vector_deltas(table, keep: int = MAX_VECTOR_DELTAS) -> int:
@@ -497,9 +515,12 @@ def main() -> None:
     parser.add_argument("--reindex", action="store_true", help="retrain the vector index on the current rows")
     parser.add_argument("--merge-text", action="store_true",
                         help="only fold the full-text index's delta into its base, then exit (about 140 MB a million rows)")
-    parser.add_argument("--merge-text-hour", type=int, metavar="H",
-                        help="in a run starting in UTC hour H, first run --merge-text in a child process")
-    parser.add_argument("--no-maintain", action="store_true", help="skip index upkeep and compaction (backfill passes)")
+    parser.add_argument("--compact", action="store_true",
+                        help="only compact (which rewrites every index), then exit")
+    parser.add_argument("--daily-hour", type=int, metavar="H",
+                        help="in a run starting in UTC hour H, first run --merge-text and then --compact, "
+                             "each in a child process")
+    parser.add_argument("--no-maintain", action="store_true", help="skip index upkeep (backfill passes)")
     parser.add_argument("--dry-run", action="store_true", help="read and count only: no writes")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s", stream=sys.stderr)
@@ -511,13 +532,15 @@ def main() -> None:
     load_dotenv(lake.REPO / ".env")
     start = time.monotonic()
     profile = Profile()
-    if args.merge_text:
-        merged = merge_text_index(store.connect().open_table(store.TABLE), profile)
-        log.info("run %s", json.dumps({"merge_text": merged, "seconds": round(time.monotonic() - start, 1),
-                                       "peak_rss_mb": round(_peak_rss_mb()), "phases": profile.phases}))
+    if args.merge_text or args.compact:
+        table = store.connect().open_table(store.TABLE)
+        out = {"merge_text": merge_text_index(table, profile)} if args.merge_text else {"compact": compact(table, profile)}
+        log.info("run %s", json.dumps(out | {"seconds": round(time.monotonic() - start, 1),
+                                             "peak_rss_mb": round(_peak_rss_mb()), "phases": profile.phases}))
         return
-    if args.merge_text_hour is not None and dt.datetime.now(dt.UTC).hour == args.merge_text_hour and not args.dry_run:
-        merge_text_in_child()
+    if args.daily_hour is not None and dt.datetime.now(dt.UTC).hour == args.daily_hour and not args.dry_run:
+        in_child("--merge-text")  # first, so one full-text segment covers every fragment compaction may merge
+        in_child("--compact")
     stats = run(inc.catalog(), store.connect(), today=dt.datetime.now(dt.UTC).date(), namespace=args.namespace, profile=profile,
                 span_minutes=args.span_minutes, max_span_rows=args.max_span_rows, max_spans=args.max_spans, dry_run=args.dry_run,
                 maintain_indexes=not args.no_maintain, reindex=args.reindex, rebuild=args.rebuild)
